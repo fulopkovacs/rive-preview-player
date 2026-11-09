@@ -100,6 +100,11 @@ const mix = {
   selected: null, // clip key
   version: 0, // bumps on every change (redraw cache key)
   saveTimer: null,
+  saveChain: Promise.resolve(),
+  inflight: 0, // saves sent but not answered
+  failed: false, // the last save failed: the local mix is ahead of the server
+  rev: 0, // bumps on every local edit
+  loadSeq: 0,
   loaded: false,
 };
 
@@ -131,7 +136,8 @@ function keyAudioEvents(events, abName, animName) {
   return events.map((ev) => {
     const n = seen.get(ev.event) ?? 0;
     seen.set(ev.event, n + 1);
-    return { ...ev, key: `${abName}/${animName}/${ev.event}#${n}`, nth: n };
+    // An unambiguous tuple: names may contain any character, "/" included.
+    return { ...ev, key: JSON.stringify([abName, animName, ev.event, n]), nth: n };
   });
 }
 
@@ -169,39 +175,53 @@ function mixChanged({ save = true } = {}) {
   if (save) scheduleMixSave();
 }
 
+// Saves run one after another so they reach the server in order. A mix fetched from the
+// server never replaces local edits that are not saved yet, or that were made while the
+// fetch was under way.
+const mixUnsaved = () => mix.saveTimer != null || mix.inflight > 0 || mix.failed;
+
 function scheduleMixSave() {
-  mix.pending = true;
+  mix.rev++;
   clearTimeout(mix.saveTimer);
   mix.saveTimer = setTimeout(saveMix, 250);
 }
 
-async function saveMix() {
+function saveMix() {
   clearTimeout(mix.saveTimer);
   mix.saveTimer = null;
-  try {
-    const res = await fetch('/api/mix', {
-      method: 'PUT',
-      headers: { 'x-client': notes.clientId },
-      body: JSON.stringify({ version: 1, tracks: mix.tracks, clips: mix.clips }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    if (!mix.saveTimer) mix.pending = false; // no newer edit queued meanwhile
-  } catch (err) {
-    toast(`Could not save the audio mix (${err.message || err})`, 3000);
-  }
+  const body = JSON.stringify({ version: 1, tracks: mix.tracks, clips: mix.clips });
+  mix.inflight++;
+  mix.saveChain = mix.saveChain.then(async () => {
+    try {
+      const res = await fetch('/api/mix', { method: 'PUT', headers: { 'x-client': notes.clientId }, body });
+      if (!res.ok) throw new Error(await res.text());
+      mix.failed = false;
+    } catch (err) {
+      mix.failed = true; // keep the local mix; the next edit tries again
+      toast(`Could not save the audio mix (${err.message || err})`, 3000);
+    } finally {
+      mix.inflight--;
+    }
+  });
+  return mix.saveChain;
 }
 
 async function loadMix() {
-  if (mix.pending) return; // our own unsaved edits win; they are saved in a moment
+  if (mixUnsaved()) return;
+  const seq = ++mix.loadSeq;
+  const rev = mix.rev;
+  let data;
   try {
     const res = await fetch('/api/mix');
     if (!res.ok) return;
-    const data = await res.json();
-    if (Array.isArray(data.tracks) && data.tracks.length) mix.tracks = data.tracks.slice(0, MAX_TRACKS);
-    mix.clips = data.clips && typeof data.clips === 'object' ? data.clips : {};
+    data = await res.json();
   } catch {
     return;
   }
+  // A newer fetch started, or the user changed something meanwhile: this response is stale.
+  if (seq !== mix.loadSeq || rev !== mix.rev || mixUnsaved()) return;
+  if (Array.isArray(data.tracks) && data.tracks.length) mix.tracks = data.tracks.slice(0, MAX_TRACKS);
+  mix.clips = data.clips && typeof data.clips === 'object' ? data.clips : {};
   mix.loaded = true;
   audio.applyTracks();
   for (const s of audio.sources) audio.applyClip(s.ev.key);
@@ -409,41 +429,72 @@ function renderClips() {
   }
 }
 
+const MIN_HIT_PX = 10; // every clip gets at least this much clickable width
+const MAX_ROWS = 6;
+
+/**
+ * Lay the clips out on their lanes. Clips closer together than MIN_HIT_PX form a cluster
+ * whose clips are packed into rows (each row gets a slice of the lane height), so every one
+ * stays clickable: a run of pops or typing keys, or sounds that fire together. A clip's box
+ * ends where the next clip in its row (or the next cluster) starts; the canvas still draws
+ * each whole waveform, and a cut box gets an open right edge.
+ */
 function positionClips(w) {
   if (tracksUI.collapsed) return;
   const layer = $('clips');
   const [va, vb] = viewRange();
-  // A clip's box ends where the next clip on its lane starts, so dense sounds (a run of
-  // pops, typing keys) never cover each other and each stays clickable. The waveform on the
-  // canvas still shows the whole sound; a cut box gets a fading right edge.
-  const next = new Map();
-  const lastOnLane = new Map();
+  const els = new Map([...layer.children].map((el) => [el.dataset.key, el]));
+  const byLane = new Map();
   for (const ev of S.audioEvents) {
     const lane = clipTrack(ev);
-    const prev = lastOnLane.get(lane);
-    if (prev) next.set(prev.key, ev.time);
-    lastOnLane.set(lane, ev);
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push({ ev, x: tToX(ev.time, w) });
   }
-  const els = new Map([...layer.children].map((el) => [el.dataset.key, el]));
-  for (const ev of S.audioEvents) {
-    const el = els.get(ev.key);
-    if (!el || el.classList.contains('dragging')) continue;
-    const end = Math.min(ev.time + clipDuration(ev), S.end);
-    const nextStart = next.get(ev.key) ?? Infinity;
-    const cut = nextStart < end;
-    const visible = ev.time <= vb && end >= va;
-    el.hidden = !visible;
-    if (!visible) continue;
-    const x0 = tToX(ev.time, w);
-    const left = Math.max(TL.pad - 2, x0);
-    const right = Math.min(tToX(Math.min(end, nextStart), w), w - TL.pad + 2);
-    const room = nextStart === Infinity ? Infinity : tToX(nextStart, w) - left;
-    el.style.left = `${left}px`;
-    el.style.width = `${Math.max(2, Math.min(room, Math.max(8, right - left)))}px`;
-    el.style.top = `${laneY(clipTrack(ev))}px`;
-    el.style.height = `${TL.laneH}px`;
-    el.classList.toggle('cut', cut);
-    el.classList.toggle('narrow', right - left < 14);
+  for (const [lane, items] of byLane) {
+    // clusters, then rows inside each cluster
+    const clusters = [];
+    for (const it of items) {
+      let c = clusters[clusters.length - 1];
+      if (!c || it.x >= c.reach) {
+        c = { items: [], rowEnds: [], reach: -Infinity };
+        clusters.push(c);
+      }
+      let row = c.rowEnds.findIndex((end) => end <= it.x);
+      if (row < 0) {
+        if (c.rowEnds.length < MAX_ROWS) row = c.rowEnds.length;
+        else row = c.rowEnds.indexOf(Math.min(...c.rowEnds));
+      }
+      c.rowEnds[row] = it.x + MIN_HIT_PX;
+      c.reach = Math.max(c.reach, it.x + MIN_HIT_PX);
+      it.row = row;
+      c.items.push(it);
+    }
+    clusters.forEach((c, ci) => {
+      const nextClusterX = clusters[ci + 1]?.items[0].x ?? Infinity;
+      const rows = c.rowEnds.length;
+      const rowH = TL.laneH / rows;
+      c.items.forEach((it, i) => {
+        const { ev } = it;
+        const el = els.get(ev.key);
+        if (!el || el.classList.contains('dragging')) return;
+        const end = Math.min(ev.time + clipDuration(ev), S.end);
+        const visible = ev.time <= vb && end >= va;
+        el.hidden = !visible;
+        if (!visible) return;
+        const nextInRow = c.items.slice(i + 1).find((o) => o.row === it.row)?.x ?? Infinity;
+        const limit = Math.min(nextInRow, nextClusterX, w - TL.pad + 2);
+        const left = Math.max(TL.pad - 2, it.x);
+        const full = tToX(end, w) - left;
+        const width = Math.max(2, Math.min(limit - left, Math.max(8, full)));
+        el.style.left = `${left}px`;
+        el.style.width = `${width}px`;
+        el.style.top = `${laneY(lane) + it.row * rowH}px`;
+        el.style.height = `${rowH}px`;
+        el.classList.toggle('cut', width < full - 0.5);
+        el.classList.toggle('narrow', width < 14);
+        el.classList.toggle('stacked', rows > 1);
+      });
+    });
   }
 }
 

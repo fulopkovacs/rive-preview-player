@@ -271,6 +271,7 @@ body.tracks-collapsed .heads-title svg { transform: rotate(-90deg); }
 .clip.alt { align-items: flex-end; }
 .clip.cut { border-right-color: transparent; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .clip.narrow { padding: 0; border-left-width: 2px; }
+.clip.stacked { padding-top: 0; padding-bottom: 0; align-items: center; }
 .clip.narrow .clip-name, .clip.narrow .clip-gain { display: none; }
 
 #clip-inspector {

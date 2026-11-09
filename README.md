@@ -69,7 +69,7 @@ with its waveform drawn at the level it plays at.
 A sound effect plays at *asset volume × clip volume × track volume*. Changes apply to sounds
 that are already playing, without restarting them. The mix is saved to
 `<project>/.rive-preview/mix.json`, so it survives reloads and rebuilds. Each clip is keyed by
-artboard, animation, event name and occurrence (`Artboard/Bounce/whoosh#2`), so retiming a
+artboard, animation, event name and occurrence (`["Artboard","Bounce","whoosh",1]`), so retiming a
 keyframe keeps its settings. The preview never changes the Rive project. To keep the levels,
 the agent can read them with the `get_audio_mix` MCP tool. They are also attached to every
 feedback bundle that has a non-default mix, with the resulting volume for each sound effect.
