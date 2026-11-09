@@ -119,6 +119,28 @@ Each bundle goes to exactly one consumer: whoever delivers it first takes a clai
 (`claimed.json` in the bundle folder), so two waiters, or a waiter and the MCP server, never
 both hand the same feedback to an agent.
 
+### Cleaning up old bundles
+
+Bundles stay in the project, so drafts and feedback survive reboots and agents can find them.
+To keep the PNGs from piling up, the player deletes bundles that an agent **read more than 14
+days ago** (going by the bundle's `consumed.json`). This runs when the player starts and after
+each send, and prints one line when it removes something. Unread bundles, drafts, `mix.json` and
+anything that isn't a complete bundle folder are never touched.
+
+| Option | |
+|---|---|
+| `--feedback-days <n>` | delete bundles read over `n` days ago instead (`0`: every read bundle) |
+| `--keep-feedback` | never delete bundles |
+| `RIVE_PREVIEW_FEEDBACK_DAYS=<n>` or `=off` | the same as an environment variable (the flags win) |
+
+To clean up by hand, or to see what would go first:
+
+```bash
+rive-video-preview prune-feedback --dry-run              # project in the current directory
+rive-video-preview prune-feedback path/to/project --days 7
+rive-video-preview prune-feedback build/scene.riv        # a bare .riv's bundles
+```
+
 ### MCP server
 
 `rive-video-preview mcp` is a stdio MCP server that gives the agent the bundles, images included:

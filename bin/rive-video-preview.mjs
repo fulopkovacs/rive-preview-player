@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DEFAULT_FEEDBACK_DAYS, FeedbackStore } from '../lib/feedback.mjs';
 import { STATE_DIR, findRunning, stateFile } from '../lib/registry.mjs';
 import { PreviewServer } from '../lib/server.mjs';
 
@@ -14,6 +15,8 @@ usage:
   rive-video-preview wait-feedback [project-dir | file.riv] [--timeout <time>] [--no-mark-read]
                                            wait for "Send to agent", print the feedback, exit
   rive-video-preview mcp [project-dir]     run the MCP server (stdio) for coding agents
+  rive-video-preview prune-feedback [project-dir | file.riv] [--days <n>] [--dry-run]
+                                           delete feedback bundles read over n days ago
 
   The project dir defaults to the current directory. It builds the project with
   \`rive . --once\`, opens a player window, and rebuilds on every save. It keeps
@@ -28,6 +31,8 @@ options:
   --no-open            don't open a window; just print the URL
   --browser            open in the default browser instead of a Chrome app window
   --no-watch           don't rebuild on file changes
+  --keep-feedback      don't delete old feedback bundles
+  --feedback-days <n>  delete bundles an agent read over n days ago (default 14)
   --stop               stop the player running for this project
   --status             print whether a player is running for this project
   -h, --help           show this help
@@ -46,6 +51,9 @@ feedback for agents:
   player shows the user whether an agent is listening. The MCP server serves the
   same bundles through get_feedback / wait_for_feedback. Register it with, e.g.:
     claude mcp add rive-preview -- rive-video-preview mcp
+  On start and after each send, bundles an agent read over 14 days ago are deleted
+  (unread bundles and drafts are never touched). Change it with --feedback-days, turn it
+  off with --keep-feedback, or set RIVE_PREVIEW_FEEDBACK_DAYS=<n> or =off.
 `;
 
 function parseArgs(argv) {
@@ -86,6 +94,12 @@ function parseArgs(argv) {
       case '--no-watch':
         opts.watch = false;
         break;
+      case '--keep-feedback':
+        opts.keepFeedback = true;
+        break;
+      case '--feedback-days':
+        opts.feedbackDays = parseDays(value(), flag);
+        break;
       case '--stop':
         opts.stop = true;
         break;
@@ -100,6 +114,50 @@ function parseArgs(argv) {
   if (positional.length > 1) fail('expected at most one project dir or .riv file');
   opts.target = path.resolve(positional[0] ?? '.');
   return opts;
+}
+
+function parseDays(v, what) {
+  const n = Number(v);
+  if (String(v).trim() === '' || !Number.isFinite(n) || n < 0) fail(`${what} must be a number of days (0 or more), got "${v}"`);
+  return n;
+}
+
+/** Days after which read bundles are pruned, or null to keep them: flags, then the env var, then 14. */
+function feedbackDays(opts) {
+  if (opts.keepFeedback) return null;
+  if (opts.feedbackDays != null) return opts.feedbackDays;
+  const env = process.env.RIVE_PREVIEW_FEEDBACK_DAYS?.trim();
+  if (env && /^(off|keep|never)$/i.test(env)) return null;
+  const n = Number(env);
+  if (env && Number.isFinite(n) && n >= 0) return n;
+  if (env) console.error(`rive-video-preview: ignoring RIVE_PREVIEW_FEEDBACK_DAYS="${env}" (expected a number of days or "off")`);
+  return DEFAULT_FEEDBACK_DAYS;
+}
+
+async function pruneFeedbackCommand(argv) {
+  let days;
+  let dryRun = false;
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--dry-run') dryRun = true;
+    else if (a === '--days') days = parseDays(argv[++i] ?? '', '--days');
+    else if (a.startsWith('--days=')) days = parseDays(a.slice(7), '--days');
+    else if (a === '-h' || a === '--help') return void process.stdout.write(HELP);
+    else if (a.startsWith('-')) fail(`unknown option ${a}`);
+    else positional.push(a);
+  }
+  if (positional.length > 1) fail('expected at most one project dir or .riv file');
+  const target = path.resolve(positional[0] ?? '.');
+  if (!existsSync(target)) fail(`${target} does not exist`);
+  if (!statSync(target).isDirectory() && !target.endsWith('.riv')) fail('expected a Rive project directory or a .riv file');
+  // An explicit prune still runs when the env var says "off"; only a number from it is used.
+  days ??= feedbackDays({}) ?? DEFAULT_FEEDBACK_DAYS;
+  const store = new FeedbackStore(target);
+  const ids = await store.prune({ olderThanDays: days, dryRun });
+  const s = ids.length === 1 ? '' : 's';
+  if (!ids.length) console.log(`no feedback bundles read over ${days} days ago in ${store.sentDir}`);
+  else console.log(`${dryRun ? 'would remove' : 'removed'} ${ids.length} feedback bundle${s} read over ${days} days ago from ${store.sentDir}:\n${ids.map((id) => `  ${id}`).join('\n')}`);
 }
 
 function fail(msg) {
@@ -183,6 +241,7 @@ async function main() {
     const { runWaitFeedback } = await import('../lib/wait-feedback.mjs');
     return runWaitFeedback(process.argv.slice(3));
   }
+  if (process.argv[2] === 'prune-feedback') return pruneFeedbackCommand(process.argv.slice(3));
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
     process.stdout.write(HELP);
@@ -229,7 +288,7 @@ async function main() {
 
   if (mode === 'project' && !spawnSyncCheck()) fail('the `rive` CLI was not found on PATH');
 
-  const server = new PreviewServer({ target: opts.target, mode, watch: opts.watch, log });
+  const server = new PreviewServer({ target: opts.target, mode, watch: opts.watch, log, feedbackDays: feedbackDays(opts) });
   const port = opts.port || (await freePort(4810));
   await server.listen(port);
   mkdirSync(STATE_DIR, { recursive: true });
@@ -246,6 +305,7 @@ async function main() {
 
   const url = playerUrl(port, opts);
   log(`rive-video-preview: ${opts.target}`);
+  await server.pruneFeedback();
   await server.rebuild('initial');
   server.startWatching();
   log(`player: ${url}`);
