@@ -1,0 +1,75 @@
+<Rive version="1" kind="fragment">
+    <AudioAsset file="whoosh.wav" name="whoosh" id="0:70"/>
+    <AudioAsset file="pop.wav" name="pop" id="0:71"/>
+    <AudioAsset file="ding.wav" volume="0.8" name="ding" id="0:72"/>
+
+    <Artboard defaultStateMachineId="0:7" styleId="0:5" width="500" height="500" name="Artboard" id="0:2">
+        <LayoutComponentStyle name="Artboard Style" id="0:5"/>
+
+        <Fill name="Background">
+            <SolidColor colorValue="FF1D1D1D" name="Color"/>
+        </Fill>
+
+        <Shape x="80" y="250" name="Ball" id="0:14">
+            <Ellipse originX="0.5" originY="0.5" width="70" height="70" name="Path"/>
+            <Fill name="Fill">
+                <SolidColor colorValue="FF57A5E0" name="Color"/>
+            </Fill>
+        </Shape>
+
+        <AudioEvent assetId="0:70" name="whoosh" id="0:60"/>
+        <AudioEvent assetId="0:71" name="pop" id="0:61"/>
+        <AudioEvent assetId="0:72" name="ding" id="0:62"/>
+
+        <StateMachine name="State Machine 1" id="0:7">
+            <StateMachineLayer name="Layer 1" id="0:8">
+                <AnyState x="200" y="-120"/>
+                <ExitState x="400" y="-120"/>
+                <EntryState>
+                    <StateTransition stateToId="0:12"/>
+                </EntryState>
+                <AnimationState x="200" animationId="0:6" id="0:12"/>
+            </StateMachineLayer>
+        </StateMachine>
+
+        <LinearAnimation loopValue="loop" fps="60" duration="240" name="Bounce" id="0:6">
+            <KeyedObject objectId="0:14">
+                <KeyedProperty propertyKey="13">
+                    <KeyFrameDouble value="80" interpolationType="linear"/>
+                    <KeyFrameDouble value="420" interpolationType="linear" frame="60"/>
+                    <KeyFrameDouble value="80" interpolationType="linear" frame="120"/>
+                    <KeyFrameDouble value="250" interpolationType="linear" frame="180"/>
+                    <KeyFrameDouble value="250" interpolationType="linear" frame="240"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="16">
+                    <KeyFrameDouble value="1" interpolationType="linear" frame="170"/>
+                    <KeyFrameDouble value="1.8" interpolationType="linear" frame="190"/>
+                    <KeyFrameDouble value="1" interpolationType="linear" frame="220"/>
+                </KeyedProperty>
+                <KeyedProperty propertyKey="17">
+                    <KeyFrameDouble value="1" interpolationType="linear" frame="170"/>
+                    <KeyFrameDouble value="1.8" interpolationType="linear" frame="190"/>
+                    <KeyFrameDouble value="1" interpolationType="linear" frame="220"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:60">
+                <KeyedProperty propertyKey="395">
+                    <KeyFrameCallback frame="0"/>
+                    <KeyFrameCallback frame="60"/>
+                    <KeyFrameCallback frame="120"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:61">
+                <KeyedProperty propertyKey="395">
+                    <KeyFrameCallback frame="58"/>
+                    <KeyFrameCallback frame="118"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:62">
+                <KeyedProperty propertyKey="395">
+                    <KeyFrameCallback frame="185"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+    </Artboard>
+</Rive>

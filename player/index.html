@@ -34,6 +34,10 @@
           <dt>F</dt><dd>Fullscreen</dd>
           <dt>S</dt><dd>Screenshot this frame (opens its note)</dd>
           <dt>N</dt><dd>Show / hide screenshots &amp; notes</dd>
+          <dt>Click a sound effect</dt><dd>Select it and set its volume below the timeline</dd>
+          <dt>Drag a sound effect</dt><dd>Move it to another audio track</dd>
+          <dt>↑ / ↓</dt><dd>Move the selected sound effect up / down a track</dd>
+          <dt>A</dt><dd>Hide / show the audio tracks</dd>
           <dt>Scroll on timeline</dt><dd>Zoom · Shift/horizontal scroll pans · double-click ruler resets</dd>
         </dl>
         <p class="hint">Press ? or Esc to close</p>
@@ -59,8 +63,39 @@
   </div>
 
   <section id="dock">
-    <div id="timeline">
-      <canvas id="timeline-canvas"></canvas>
+    <div id="timeline-wrap">
+      <div id="track-heads">
+        <div class="heads-top">
+          <button id="btn-collapse-tracks" class="heads-title" aria-expanded="true" aria-label="Hide audio tracks" title="Hide / show the audio tracks (A)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 5.5 8 10l4.5-4.5 1 1L8 12 2.5 6.5z"/></svg><span>Audio tracks</span><span id="tracks-count"></span></button>
+          <button id="btn-add-track" class="chip" title="Add an audio track (up to 3)">+ Track</button>
+        </div>
+        <div id="track-list"></div>
+      </div>
+      <div id="timeline">
+        <canvas id="timeline-canvas"></canvas>
+        <div id="clips"></div>
+      </div>
+    </div>
+    <div id="clip-inspector" hidden>
+      <span id="ci-dot"></span>
+      <span id="ci-name"></span>
+      <button id="ci-time" class="chip" title="Jump to this sound effect"></button>
+      <span id="ci-asset"></span>
+      <span class="ci-sep"></span>
+      <label class="ci-label" for="ci-gain">Volume</label>
+      <div class="ci-steps">
+        <input id="ci-gain" type="range" min="0" max="100" step="10" value="100" list="ci-ticks" aria-label="Sound effect volume">
+        <datalist id="ci-ticks"><option value="0"></option><option value="10"></option><option value="20"></option><option value="30"></option><option value="40"></option><option value="50"></option><option value="60"></option><option value="70"></option><option value="80"></option><option value="90"></option><option value="100"></option></datalist>
+        <div class="ci-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <span id="ci-pct"></span>
+      <span id="ci-db"></span>
+      <button id="ci-all" class="chip" title="Give every occurrence of this sound effect the same track and volume"></button>
+      <button id="ci-reset" class="chip" title="Back to track 1 at 100%">Reset</button>
+      <span class="spacer"></span>
+      <button id="ci-close" class="icon small" title="Deselect (Esc)" aria-label="Deselect sound effect">
+        <svg viewBox="0 0 16 16"><path d="M4.2 3.1 8 6.9l3.8-3.8 1.1 1.1L9.1 8l3.8 3.8-1.1 1.1L8 9.1l-3.8 3.8-1.1-1.1L6.9 8 3.1 4.2z"/></svg>
+      </button>
     </div>
     <div id="controls">
       <button id="btn-play" class="icon" title="Play / pause (Space)" aria-label="Play"></button>
@@ -94,7 +129,7 @@
         <option value="2">2×</option>
       </select>
       <button id="btn-mute" class="icon small" title="Mute (M)" aria-label="Mute"></button>
-      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" title="Master volume" aria-label="Master volume">
       <button id="btn-shot" class="icon small" title="Screenshot this frame (S)" aria-label="Screenshot">
         <svg viewBox="0 0 16 16"><path d="M5.6 2.5h4.8l1 1.6H14a1 1 0 0 1 1 1v7.4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5.1a1 1 0 0 1 1-1h2.6zM8 5.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8zm0 1.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
       </button>
