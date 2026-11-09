@@ -35,12 +35,14 @@ options:
 player keys:
   space play/pause · ←/→ frame · shift+←/→ 1s · home/end · i/o in/out · x clear range
   c copy timecode · shift+c copy range · g go to time · l loop · m mute · f fullscreen · ? help
-  s screenshot this frame · n screenshots & notes panel
+  s screenshot this frame · shift+s drag (or type) a box to highlight a region (esc cancels)
+  n screenshots & notes panel
   click a sound effect to set its volume · drag or ↑/↓ moves it between tracks (up to 3) · a hides tracks
 
 feedback for agents:
   Screenshots and notes are kept in <project>/.rive-preview/. "Send to agent" writes a
-  bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs). To be woken by it, an
+  bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs; a region shot also records
+  its box in artboard units). To be woken by it, an
   agent runs \`rive-video-preview wait-feedback .\` as a background command: it exits
   with the feedback as soon as the user sends it (see wait-feedback --help). The
   player shows the user whether an agent is listening. The MCP server serves the

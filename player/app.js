@@ -1618,7 +1618,10 @@ window.addEventListener('keydown', (e) => {
       break;
     case 's':
     case 'S':
-      takeScreenshot();
+      // Shift+S: drag a region to highlight. Checked by shiftKey so Caps Lock keeps plain S.
+      if (region.active) cancelRegion();
+      else if (e.shiftKey) startRegion();
+      else takeScreenshot();
       break;
     case 'n':
     case 'N':
@@ -1638,7 +1641,8 @@ window.addEventListener('keydown', (e) => {
       handled = moveSelected(1);
       break;
     case 'Escape':
-      if (!$('help').hidden) $('help').hidden = true;
+      if (region.active) cancelRegion();
+      else if (!$('help').hidden) $('help').hidden = true;
       else if (mix.selected) selectClip(null);
       break;
     default:
@@ -1673,6 +1677,7 @@ const notes = {
 };
 const ICON_X = '<svg viewBox="0 0 16 16"><path d="M4.2 3.1 8 6.9l3.8-3.8 1.1 1.1L9.1 8l3.8 3.8-1.1 1.1L8 9.1l-3.8 3.8-1.1-1.1L6.9 8 3.1 4.2z"/></svg>';
 const MAX_SHOT_EDGE = 1600;
+const REGION_COLOR = '#ffcc33';
 
 function setNotesOpen(open) {
   notes.open = open;
@@ -1684,21 +1689,62 @@ function setNotesOpen(open) {
   } catch {}
 }
 
-/** Crop the drawn artboard out of the stage canvas (scaled to at most MAX_SHOT_EDGE). */
-function cropStage() {
+/**
+ * Where the artboard sits on the stage canvas, in canvas pixels. The same Fit.contain +
+ * center alignment drawStage asks the renderer for, so screenshots and regions line up.
+ */
+function artboardRect() {
   const cw = canvas.width;
   const ch = canvas.height;
   const b = S.artboard.bounds;
   const aw = b.maxX - b.minX;
   const ah = b.maxY - b.minY;
-  let sx = 0, sy = 0, sw = cw, sh = ch;
-  if (aw > 0 && ah > 0) {
-    const k = Math.min(cw / aw, ch / ah);
-    sw = aw * k;
-    sh = ah * k;
-    sx = (cw - sw) / 2;
-    sy = (ch - sh) / 2;
-  }
+  if (!(aw > 0 && ah > 0)) return { x: 0, y: 0, w: cw, h: ch, aw: cw, ah: ch, k: 1 };
+  const k = Math.min(cw / aw, ch / ah);
+  return { x: (cw - aw * k) / 2, y: (ch - ah * k) / 2, w: aw * k, h: ah * k, aw, ah, k };
+}
+
+/** A point in CSS pixels relative to the stage canvas -> artboard units (from its top-left). */
+function stageToArtboard(px, py) {
+  const r = artboardRect();
+  // canvas.width is clientWidth × devicePixelRatio (rounded): use the real ratio.
+  const sx = canvas.width / Math.max(1, canvas.clientWidth);
+  const sy = canvas.height / Math.max(1, canvas.clientHeight);
+  return { x: (px * sx - r.x) / r.k, y: (py * sy - r.y) / r.k };
+}
+
+/** A box in artboard units -> CSS pixels relative to the stage canvas. */
+function artboardToStage(box) {
+  const r = artboardRect();
+  const sx = canvas.width / Math.max(1, canvas.clientWidth);
+  const sy = canvas.height / Math.max(1, canvas.clientHeight);
+  return { x: (r.x + box.x * r.k) / sx, y: (r.y + box.y * r.k) / sy, width: (box.width * r.k) / sx, height: (box.height * r.k) / sy };
+}
+
+const round1 = (v) => Math.round(v * 10) / 10;
+
+/**
+ * Clamp a region ({x, y, width, height} in artboard units; negative sizes are flipped) to the
+ * artboard. Returns null when nothing of it is left, else the region plus the artboard size.
+ */
+function normalizeRegion(box) {
+  if (!S.artboard || !box) return null;
+  const { aw, ah } = artboardRect();
+  let { x, y, width, height } = box;
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  if (width < 0) (x += width), (width = -width);
+  if (height < 0) (y += height), (height = -height);
+  const x0 = clamp(x, 0, aw);
+  const y0 = clamp(y, 0, ah);
+  const x1 = clamp(x + width, 0, aw);
+  const y1 = clamp(y + height, 0, ah);
+  if (x1 - x0 <= 0 || y1 - y0 <= 0) return null;
+  return { x: round1(x0), y: round1(y0), width: round1(x1 - x0), height: round1(y1 - y0), artboardWidth: round1(aw), artboardHeight: round1(ah) };
+}
+
+/** Crop the drawn artboard out of the stage canvas (scaled to at most MAX_SHOT_EDGE). */
+function cropStage() {
+  const { x: sx, y: sy, w: sw, h: sh } = artboardRect();
   const k = Math.min(1, MAX_SHOT_EDGE / Math.max(sw, sh));
   const out = document.createElement('canvas');
   out.width = Math.max(1, Math.round(sw * k));
@@ -1708,6 +1754,32 @@ function cropStage() {
   g.fillRect(0, 0, out.width, out.height);
   g.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
   return out;
+}
+
+/** Highlight a region (artboard units) on a cropped shot: dim what is outside it, outline it. */
+function drawRegion(img, region) {
+  const g = img.getContext('2d');
+  const s = img.width / region.artboardWidth;
+  const x = region.x * s;
+  const y = region.y * s;
+  const w = region.width * s;
+  const h = region.height * s;
+  g.save();
+  g.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  g.beginPath();
+  g.rect(0, 0, img.width, img.height);
+  g.rect(x, y, w, h);
+  g.fill('evenodd');
+  const lw = Math.max(2, Math.round(Math.max(img.width, img.height) / 400));
+  // A dark halo under a bright line reads on light and dark artwork alike.
+  g.lineJoin = 'miter';
+  g.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+  g.lineWidth = lw + 2;
+  g.strokeRect(x + lw / 2, y + lw / 2, Math.max(0, w - lw), Math.max(0, h - lw));
+  g.strokeStyle = REGION_COLOR;
+  g.lineWidth = lw;
+  g.strokeRect(x + lw / 2, y + lw / 2, Math.max(0, w - lw), Math.max(0, h - lw));
+  g.restore();
 }
 
 function looksBlank(c) {
@@ -1732,12 +1804,19 @@ function captureFrame() {
   });
 }
 
-async function takeScreenshot() {
+/**
+ * Screenshot the frame under the playhead. With `region` ({x, y, width, height} in artboard
+ * units, from the artboard's top-left) the full frame is kept and that box is highlighted on it.
+ */
+async function takeScreenshot({ region = null } = {}) {
   if (!S.artboard) return toast('Nothing to capture yet');
   if (S.playing) pause();
   const t = snap(S.t);
   S.t = t;
+  const box = region ? normalizeRegion(region) : null;
+  if (region && !box) return toast('That region is outside the artboard', 2000);
   const img = await captureFrame();
+  if (box) drawRegion(img, box);
   const res = await fetch('/api/shots', {
     method: 'POST',
     headers: { 'x-client': notes.clientId },
@@ -1751,6 +1830,7 @@ async function takeScreenshot() {
       animation: S.animName,
       width: img.width,
       height: img.height,
+      region: box,
     }),
   });
   if (!res.ok) return toast(`Screenshot failed: ${await res.text()}`, 3000);
@@ -1764,8 +1844,126 @@ async function takeScreenshot() {
     card.scrollIntoView({ block: 'nearest' });
     card.querySelector('textarea').focus();
   }
-  toast(`Screenshot  ${shot.timecode} — write a note`);
+  toast(`${shot.region ? 'Region screenshot' : 'Screenshot'}  ${shot.timecode} — write a note`);
+  return shot;
 }
+
+// ---------------------------------------------------------------- region screenshots
+// Shift+S (or Shift-click the camera) arms region mode: drag a box over the artboard, and on
+// release the frame is captured with that box highlighted. Esc (or Shift+S again) cancels.
+// The box is kept in artboard units, so resizing the stage (e.g. the notes panel) mid-drag is fine.
+const region = { active: false, start: null, box: null, pointer: null };
+const regionEl = $('region');
+const regionBox = $('region-box');
+const regionShade = $('region-shade');
+const MIN_DRAG_PX = 4;
+
+function startRegion() {
+  if (!S.artboard) return toast('Nothing to capture yet');
+  if (S.playing) pause();
+  region.active = true;
+  region.start = region.box = null;
+  regionEl.hidden = false;
+  regionInput.value = '';
+  regionInput.classList.remove('bad');
+  $('btn-shot').classList.add('on');
+  renderRegion();
+}
+
+function cancelRegion() {
+  if (!region.active) return;
+  if (document.activeElement === regionInput) regionInput.blur();
+  region.active = false;
+  region.start = region.box = region.pointer = null;
+  regionEl.hidden = true;
+  $('btn-shot').classList.remove('on');
+}
+
+/** Lay the overlay out for the current box (artboard units) and stage size. */
+function renderRegion() {
+  if (!region.active || !S.artboard) return;
+  const ab = artboardToStage({ x: 0, y: 0, width: artboardRect().aw, height: artboardRect().ah });
+  Object.assign(regionShade.style, { left: `${ab.x}px`, top: `${ab.y}px`, width: `${ab.width}px`, height: `${ab.height}px` });
+  const box = region.box && normalizeRegion(region.box);
+  regionBox.hidden = !box;
+  regionEl.classList.toggle('dragging', !!box);
+  if (!box) return;
+  const r = artboardToStage(box);
+  Object.assign(regionBox.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.width}px`, height: `${r.height}px` });
+  $('region-size').textContent = `${Math.round(box.width)} × ${Math.round(box.height)}`;
+}
+
+/** "40, 30, 200, 120" (commas and/or spaces; a × works for the size) -> box in artboard units. */
+function parseRegion(text) {
+  const n = String(text).trim().split(/[\s,;×x]+/i).filter(Boolean).map(Number);
+  if (n.length !== 4 || !n.every(Number.isFinite)) return null;
+  return { x: n[0], y: n[1], width: n[2], height: n[3] };
+}
+
+const regionInput = $('region-input');
+// Typing the box previews it live; Enter captures. Handy for exact boxes, and for tests that cannot drag.
+regionInput.addEventListener('input', () => {
+  const box = parseRegion(regionInput.value);
+  regionInput.classList.toggle('bad', !!regionInput.value.trim() && !(box && normalizeRegion(box)));
+  region.box = box;
+  renderRegion();
+});
+regionInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  e.stopPropagation(); // the window handler would only blur the field
+  cancelRegion();
+});
+$('region-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const box = normalizeRegion(parseRegion(regionInput.value));
+  if (!box) {
+    regionInput.classList.add('bad');
+    return toast('Type x, y, width, height in artboard units, inside the artboard', 2200);
+  }
+  regionInput.blur();
+  cancelRegion();
+  takeScreenshot({ region: box });
+});
+
+function regionPoint(e) {
+  const c = canvas.getBoundingClientRect();
+  return stageToArtboard(e.clientX - c.left, e.clientY - c.top);
+}
+
+regionEl.addEventListener('pointerdown', (e) => {
+  if (!region.active || e.button !== 0 || e.target.closest('#region-form')) return;
+  e.preventDefault();
+  regionEl.setPointerCapture(e.pointerId);
+  region.pointer = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  region.start = regionPoint(e);
+  region.box = null;
+  renderRegion();
+});
+regionEl.addEventListener('pointermove', (e) => {
+  if (!region.active || !region.start || region.pointer?.id !== e.pointerId) return;
+  if (Math.hypot(e.clientX - region.pointer.x, e.clientY - region.pointer.y) < MIN_DRAG_PX && !region.box) return;
+  const p = regionPoint(e);
+  region.box = { x: region.start.x, y: region.start.y, width: p.x - region.start.x, height: p.y - region.start.y };
+  const box = normalizeRegion(region.box);
+  regionInput.value = box ? `${Math.round(box.x)}, ${Math.round(box.y)}, ${Math.round(box.width)}, ${Math.round(box.height)}` : '';
+  renderRegion();
+});
+const endRegionDrag = (e) => {
+  if (!region.active || region.pointer?.id !== e.pointerId) return;
+  const box = region.box && normalizeRegion(region.box);
+  region.start = region.box = region.pointer = null;
+  if (e.type === 'pointercancel') return renderRegion();
+  if (!box) {
+    // A click (or a box entirely off the artboard) keeps region mode on: say what to do.
+    renderRegion();
+    return toast('Drag a box over the artboard · Esc cancels', 1800);
+  }
+  cancelRegion();
+  takeScreenshot({ region: box });
+};
+regionEl.addEventListener('pointerup', endRegionDrag);
+regionEl.addEventListener('pointercancel', endRegionDrag);
 
 async function loadShots() {
   try {
@@ -1791,6 +1989,12 @@ function artboardNamesSafe() {
   }
 }
 
+/** {x, y, width, height, artboardWidth, artboardHeight} -> "120, 80, 200 × 150 in artboard units (artboard 1920 × 1080)" */
+function regionText(r) {
+  const n = (v) => String(round1(v));
+  return `${n(r.x)}, ${n(r.y)}, ${n(r.width)} × ${n(r.height)} in artboard units (artboard ${n(r.artboardWidth)} × ${n(r.artboardHeight)})`;
+}
+
 function makeCard(s) {
   const el = document.createElement('div');
   el.className = 'shot';
@@ -1800,12 +2004,18 @@ function makeCard(s) {
     <div class="shot-bar">
       <span class="shot-n"></span>
       <button class="shot-tc" title="Jump to this frame"></button>
+      <span class="shot-region" hidden>region</span>
       <span class="shot-where"></span>
       <button class="shot-del" title="Delete screenshot" aria-label="Delete screenshot">${ICON_X}</button>
     </div>
     <textarea rows="3" placeholder="What should change here?" spellcheck="true"></textarea>`;
   el.querySelector('img').src = s.url;
   el.querySelector('.shot-tc').textContent = s.timecode;
+  if (s.region) {
+    const b = el.querySelector('.shot-region');
+    b.hidden = false;
+    b.title = `Highlighted region: ${regionText(s.region)}`;
+  }
   const ta = el.querySelector('textarea');
   ta.value = s.note || '';
   ta.addEventListener('input', () => scheduleSave(s.id, ta.value));
@@ -2013,7 +2223,11 @@ function saveMessageDraft() {
   } catch {}
 }
 
-$('btn-shot').addEventListener('click', takeScreenshot);
+$('btn-shot').addEventListener('click', (e) => {
+  if (region.active) cancelRegion();
+  else if (e.shiftKey) startRegion();
+  else takeScreenshot();
+});
 $('btn-notes').addEventListener('click', () => setNotesOpen(!notes.open));
 $('btn-notes-close').addEventListener('click', () => setNotesOpen(false));
 $('btn-share').addEventListener('click', shareShots);
@@ -2047,6 +2261,7 @@ function frame() {
   if (S.dirty) {
     S.dirty = false;
     drawStage();
+    if (region.active) renderRegion();
     S.tlDirty = true;
   }
   if (S.tlDirty) {
@@ -2142,4 +2357,9 @@ function connect() {
 });
 
 // Exposed for debugging / automation.
-window.rvp = { S, audio, mix, seek, play, pause, timecodeText, parseTime, takeScreenshot, notes };
+window.rvp = {
+  S, audio, mix, seek, play, pause, timecodeText, parseTime, takeScreenshot, notes,
+  // Region screenshots without a mouse: rvp.takeScreenshot({ region: { x, y, width, height } }) in
+  // artboard units, or rvp.startRegion() and drag. stageToArtboard / artboardToStage map CSS px.
+  region, startRegion, parseRegion, cancelRegion, stageToArtboard, artboardToStage, artboardRect, normalizeRegion,
+};

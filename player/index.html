@@ -13,6 +13,15 @@
   <div id="main">
   <main id="stage">
     <canvas id="canvas"></canvas>
+    <div id="region" hidden>
+      <div id="region-shade"></div>
+      <div id="region-box" hidden><span id="region-size"></span></div>
+      <form id="region-form" autocomplete="off">
+        <span id="region-hint">Drag a box over the artboard to highlight it, or type it:</span>
+        <input id="region-input" type="text" spellcheck="false" placeholder="x, y, width, height" aria-label="Region in artboard units (x, y, width, height)" title="In artboard units from the artboard's top-left · Enter takes the screenshot">
+        <span class="region-esc"><kbd>Esc</kbd> cancels</span>
+      </form>
+    </div>
     <div id="badge"><span id="badge-dot"></span><span id="badge-name">rive-video-preview</span><span id="badge-status">connecting…</span></div>
     <pre id="error" hidden></pre>
     <div id="toast" hidden></div>
@@ -33,6 +42,7 @@
           <dt>M</dt><dd>Mute</dd>
           <dt>F</dt><dd>Fullscreen</dd>
           <dt>S</dt><dd>Screenshot this frame (opens its note)</dd>
+          <dt>Shift + S</dt><dd>Region screenshot: drag a box to highlight, or type x, y, width, height and press Enter (also Shift-click the camera) · Esc cancels</dd>
           <dt>N</dt><dd>Show / hide screenshots &amp; notes</dd>
           <dt>Click a sound effect</dt><dd>Select it and set its volume below the timeline</dd>
           <dt>Drag a sound effect</dt><dd>Move it to another audio track</dd>
@@ -53,7 +63,7 @@
       </button>
     </header>
     <div id="shot-list"></div>
-    <p id="shot-empty">Press <kbd>S</kbd> or the camera button to screenshot the current frame, then write what should change.</p>
+    <p id="shot-empty">Press <kbd>S</kbd> or the camera button to screenshot the current frame, then write what should change. <kbd>Shift</kbd>+<kbd>S</kbd> lets you drag a box to highlight one area.</p>
     <footer class="notes-foot">
       <textarea id="share-message" rows="2" placeholder="Overall note for the agent (optional)" spellcheck="true"></textarea>
       <button id="btn-share" class="primary" disabled>Send to agent</button>
@@ -130,7 +140,7 @@
       </select>
       <button id="btn-mute" class="icon small" title="Mute (M)" aria-label="Mute"></button>
       <input id="volume" type="range" min="0" max="1" step="0.01" value="1" title="Master volume" aria-label="Master volume">
-      <button id="btn-shot" class="icon small" title="Screenshot this frame (S)" aria-label="Screenshot">
+      <button id="btn-shot" class="icon small" title="Screenshot this frame (S) · Shift-click: highlight a region (Shift+S)" aria-label="Screenshot">
         <svg viewBox="0 0 16 16"><path d="M5.6 2.5h4.8l1 1.6H14a1 1 0 0 1 1 1v7.4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5.1a1 1 0 0 1 1-1h2.6zM8 5.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8zm0 1.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
       </button>
       <button id="btn-notes" class="chip toggle" title="Screenshots &amp; notes (N)">Notes<span id="notes-count"></span></button>

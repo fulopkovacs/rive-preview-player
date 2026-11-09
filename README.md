@@ -47,6 +47,7 @@ running. With `--at`, the open window jumps to that time.
 | G | go to time (or double-click the timecode) |
 | L / M / F | loop / mute / fullscreen |
 | S | screenshot the current frame and open its note |
+| Shift+S | region screenshot: drag (or type) a box over the artboard to highlight it (also Shift-click the camera button) · Esc cancels |
 | N | show / hide the screenshots & notes panel |
 | ↑ / ↓ | move the selected sound effect up / down a track |
 | A | hide / show the audio tracks |
@@ -84,11 +85,23 @@ feedback bundle that has a non-default mix, with the resulting volume for each s
 Press **S** (or the camera button) to screenshot the frame under the playhead. The panel on
 the right lists every screenshot with its timecode and a note field: write what should change,
 and edit it as often as you like (notes save as you type; Esc leaves the field). Click a
-thumbnail or its timecode to jump back to that frame. When you are done, add an optional
+thumbnail or its timecode to jump back to that frame.
+
+To point at one part of the frame, press **Shift+S** (or Shift-click the camera button) and drag a
+box over the artboard, or type the box (`x, y, width, height` in artboard units) into the field
+that appears at the bottom of the stage and press Enter; dragging fills that field in, so you can
+fine-tune a dragged box before pressing Enter. The screenshot keeps the whole artboard and highlights the box: the rest is
+dimmed and the box is outlined, and the card gets a *region* badge. A click without a drag does
+nothing; Esc (or Shift+S again) cancels. The box is saved with the shot in **artboard units**
+(x, y, width, height from the artboard's top-left, plus the artboard's width and height), so the
+agent can match it to elements in the scene. It appears in `feedback.md` as
+`Region: 120, 80, 200 × 150 in artboard units (…; artboard 1920 × 1080)`, in `feedback.json` as
+`region`, and in the `get_feedback` text. From the browser console,
+`rvp.takeScreenshot({ region: { x: 120, y: 80, width: 200, height: 150 } })` takes one without a mouse. When you are done, add an optional
 overall note and press **Send to agent** (Cmd+Enter in the overall note does the same).
 
 Sending writes a bundle to `<project>/.rive-preview/feedback/<date_time>/`:
-`feedback.md` (notes, timecodes and image paths), `feedback.json`, and the PNGs, each cropped to
+`feedback.md` (notes, timecodes, regions and image paths), `feedback.json`, and the PNGs, each cropped to
 the artboard. The panel then says whether the agent is listening for it (it picks the bundle up
 right away) or not (paste the ready-made prompt, which is copied to the clipboard, into your
 agent chat), and shows when the agent has read the bundle. `.rive-preview/` gets its own `.gitignore`, so nothing in it is committed.
@@ -125,7 +138,7 @@ both hand the same feedback to an agent.
 
 | Tool | |
 |---|---|
-| `get_feedback` | unread bundles (notes, timecodes, artboard/animation, images); marks them read |
+| `get_feedback` | unread bundles (notes, timecodes, artboard/animation, regions, images); marks them read |
 | `wait_for_feedback` | blocks the agent until you press Send to agent (default timeout 600s), then returns it; `wait-feedback` in the background is usually better |
 | `seek_player` | moves the open player to a time, e.g. to show the frame it changed |
 | `get_audio_mix` | the tracks and per-sound-effect levels set in the player, and the level each plays at |
