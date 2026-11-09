@@ -916,6 +916,7 @@ function pickAnimation(abName, want) {
 }
 
 function disposeInstances() {
+  cancelRegion(); // a box in the old artboard's units means nothing on the next one
   if (S.anim) S.anim.delete();
   if (S.artboard) S.artboard.delete();
   S.anim = null;
@@ -1618,10 +1619,13 @@ window.addEventListener('keydown', (e) => {
       break;
     case 's':
     case 'S':
-      // Shift+S: drag a region to highlight. Checked by shiftKey so Caps Lock keeps plain S.
-      if (region.active) cancelRegion();
-      else if (e.shiftKey) startRegion();
-      else takeScreenshot();
+      // Shift+S toggles region mode (checked by shiftKey, so Caps Lock keeps plain S).
+      // Plain S always takes a full-frame shot, leaving region mode if it was on.
+      if (e.shiftKey) region.active ? cancelRegion() : startRegion();
+      else {
+        cancelRegion();
+        takeScreenshot();
+      }
       break;
     case 'n':
     case 'N':
@@ -2224,9 +2228,9 @@ function saveMessageDraft() {
 }
 
 $('btn-shot').addEventListener('click', (e) => {
-  if (region.active) cancelRegion();
-  else if (e.shiftKey) startRegion();
-  else takeScreenshot();
+  if (e.shiftKey) return region.active ? cancelRegion() : startRegion();
+  cancelRegion();
+  takeScreenshot();
 });
 $('btn-notes').addEventListener('click', () => setNotesOpen(!notes.open));
 $('btn-notes-close').addEventListener('click', () => setNotesOpen(false));

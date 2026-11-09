@@ -89,10 +89,10 @@ thumbnail or its timecode to jump back to that frame.
 
 To point at one part of the frame, press **Shift+S** (or Shift-click the camera button) and drag a
 box over the artboard, or type the box (`x, y, width, height` in artboard units) into the field
-that appears at the bottom of the stage and press Enter; dragging fills that field in, so you can
-fine-tune a dragged box before pressing Enter. The screenshot keeps the whole artboard and highlights the box: the rest is
+that appears at the bottom of the stage and press Enter. Releasing a drag takes the screenshot
+right away; type the box instead when you need exact numbers. The screenshot keeps the whole artboard and highlights the box: the rest is
 dimmed and the box is outlined, and the card gets a *region* badge. A click without a drag does
-nothing; Esc (or Shift+S again) cancels. The box is saved with the shot in **artboard units**
+nothing; Esc (or Shift+S again) cancels, and plain S takes a full-frame shot instead. The box is saved with the shot in **artboard units**
 (x, y, width, height from the artboard's top-left, plus the artboard's width and height), so the
 agent can match it to elements in the scene. It appears in `feedback.md` as
 `Region: 120, 80, 200 × 150 in artboard units (…; artboard 1920 × 1080)`, in `feedback.json` as
