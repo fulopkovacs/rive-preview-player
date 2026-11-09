@@ -88,6 +88,20 @@ It finds the project from the tool's `project` argument, the dir given after `mc
 It reads bundles from disk, so the player does not have to be running; only `seek_player` needs it.
 Agents without MCP can read the `feedback.md` path from the copied prompt.
 
+## Agent skill
+
+The repo ships an [Agent Skill](https://vercel.com/docs/agent-resources/skills) that teaches coding
+agents to start the player, point you at moments, and read the screenshots and notes you send.
+Install it with the `skills` CLI:
+
+```bash
+npx skills add fulopkovacs/rive-preview-player        # into the current project
+npx skills add fulopkovacs/rive-preview-player -g     # for every project
+```
+
+The skill only covers how to use the tool. You still need the CLI on PATH (see Install) and the
+MCP server registered for the agent (see MCP server above).
+
 ## Snippet for a project's AGENTS.md
 
 ```md
