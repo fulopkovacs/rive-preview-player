@@ -6,7 +6,7 @@ audio, frame stepping and copyable timecodes. It runs in a resizable Chrome app 
 ```bash
 rive-video-preview                      # preview the project in the current directory
 rive-video-preview path/to/project      # …or another project
-rive-video-preview build/scene.riv      # …or a prebuilt .riv (no audio timing, see below)
+rive-video-preview build/scene.riv      # …or a prebuilt .riv
 rive-video-preview . --at 12.5          # jump to 12.5s (also 1:02.25, f741)
 rive-video-preview . --stop             # stop the player for this project
 ```
@@ -43,11 +43,36 @@ running. With `--at`, the open window jumps to that time.
 | L / M / F | loop / mute / fullscreen |
 | S | screenshot the current frame and open its note |
 | N | show / hide the screenshots & notes panel |
+| ↑ / ↓ | move the selected sound effect up / down a track |
+| A | hide / show the audio tracks |
 
 To copy the playhead time you can also click the timecode. Each copied timecode is also
 printed in the terminal running the player. Scroll on the timeline to zoom, Shift-scroll
-or a horizontal scroll pans, and a double-click on the ruler resets the zoom. The waveform
-lane is a mix of all audio events, and the coloured ticks mark where each event fires.
+or a horizontal scroll pans, and a double-click on the ruler resets the zoom.
+
+## Audio tracks and sound-effect levels
+
+Below the stage, every sound effect (each `AudioEvent` keyframe) is a clip on an audio track,
+with its waveform drawn at the level it plays at.
+
+- **+ Track** adds a track, up to 3. Each track has a name, **M** (mute), **S** (solo), a volume
+  slider (0–150%, double-click resets) and a remove button. Removing a track moves its sound
+  effects to the track above it.
+- **Click a clip** to select it. A bar below the timeline then sets its volume with a stepped
+  slider (0–100% in steps of 10, with dB), applies its track and volume to every occurrence of that
+  sound effect, or resets it. Double-click a clip to jump to it.
+- **Drag a clip** up or down to move it to another track, or press **↑ / ↓** while it is selected.
+  ↓ on the last track adds a new one. Esc deselects.
+- **Collapse** the tracks with the *Audio tracks* toggle (or **A**) to get the space back. The
+  timeline then shows only the ruler and a tick wherever a sound effect fires.
+
+A sound effect plays at *asset volume × clip volume × track volume*. Changes apply to sounds
+that are already playing, without restarting them. The mix is saved to
+`<project>/.rive-preview/mix.json`, so it survives reloads and rebuilds. Each clip is keyed by
+artboard, animation, event name and occurrence (`Artboard/Bounce/whoosh#2`), so retiming a
+keyframe keeps its settings. The preview never changes the Rive project. To keep the levels,
+the agent can read them with the `get_audio_mix` MCP tool. They are also attached to every
+feedback bundle that has a non-default mix, with the resulting volume for each sound effect.
 
 ## Screenshots, notes and the coding agent
 
@@ -73,6 +98,7 @@ in one folder keep their screenshots apart.
 | `get_feedback` | unread bundles (notes, timecodes, artboard/animation, images); marks them read |
 | `wait_for_feedback` | blocks until you press Send to agent (default timeout 600s), then returns it |
 | `seek_player` | moves the open player to a time, e.g. to show the frame it changed |
+| `get_audio_mix` | the tracks and per-sound-effect levels set in the player, and the level each plays at |
 
 ```bash
 claude mcp add rive-preview -- rive-video-preview mcp            # Claude Code, project in cwd
@@ -111,8 +137,11 @@ Agents without MCP can read the `feedback.md` path from the copied prompt.
   played.
 - The player bypasses the state machine and drives the chosen animation directly, so
   inputs, listeners and data-bound logic do not run. Use `rive .` to test interactivity.
-- For a bare `.riv`, the duration is measured and the fps assumed to be 60, and the
-  audio timing is unavailable.
+- For a bare `.riv` there is no project to inspect, so the player reads the artboards,
+  animations and `AudioEvent` keyframes from the file itself (`lib/riv-audio.mjs`). The property
+  types it needs come from `lib/riv-schema.json`; regenerate that with
+  `node scripts/gen-riv-schema.mjs` after a Rive CLI update. If the file cannot be read that
+  way, the duration is measured, the fps is assumed to be 60, and there is no audio timing.
 - Scripted (Luau) projects may fail to load: web runtimes reject the unsigned scripts
   that local builds carry.
 

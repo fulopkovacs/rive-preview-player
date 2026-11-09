@@ -88,6 +88,469 @@ function savePrefs() {
   } catch {}
 }
 
+// ================================================================ mix (tracks + per-sound-effect levels)
+// Saved by the server in <project>/.rive-preview/mix.json. A sound effect plays at
+// asset volume × clip gain × track volume. Clips not in mix.clips are on track 1 at 100%.
+const MAX_TRACKS = 3;
+const MAX_CLIP_PCT = 100;
+const CLIP_STEP_PCT = 10;
+const mix = {
+  tracks: [{ name: 'Track 1', volume: 1, muted: false, solo: false }],
+  clips: {}, // clip key -> { track, gain, ...description }
+  selected: null, // clip key
+  version: 0, // bumps on every change (redraw cache key)
+  saveTimer: null,
+  loaded: false,
+};
+
+function clipState(ev) {
+  return mix.clips[ev.key];
+}
+function clipTrack(ev) {
+  return clamp(clipState(ev)?.track ?? 0, 0, mix.tracks.length - 1);
+}
+function clipGain(ev) {
+  return clipState(ev)?.gain ?? 1;
+}
+function clipLevel(ev) {
+  return (ev.volume ?? 1) * clipGain(ev);
+}
+function trackLevel(i) {
+  const t = mix.tracks[i];
+  if (!t) return 0;
+  const anySolo = mix.tracks.some((x) => x.solo);
+  return t.muted || (anySolo && !t.solo) ? 0 : t.volume;
+}
+
+const pctText = (g) => `${Math.round(g * 100)}%`;
+const dbText = (g) => (g <= 0.0001 ? '−∞ dB' : `${g >= 1 ? '+' : '−'}${Math.abs(20 * Math.log10(g)).toFixed(1)} dB`);
+
+/** Give every audio event a stable key: the nth firing of that AudioEvent in this animation. */
+function keyAudioEvents(events, abName, animName) {
+  const seen = new Map();
+  return events.map((ev) => {
+    const n = seen.get(ev.event) ?? 0;
+    seen.set(ev.event, n + 1);
+    return { ...ev, key: `${abName}/${animName}/${ev.event}#${n}`, nth: n };
+  });
+}
+
+function clipDuration(ev) {
+  return audio.buffers.get(ev.asset)?.duration ?? 0.2;
+}
+
+function setClip(ev, patch) {
+  const prev = clipState(ev) ?? { track: 0, gain: 1 };
+  const next = { ...prev, ...patch };
+  next.track = clamp(next.track, 0, mix.tracks.length - 1);
+  next.gain = clamp(next.gain, 0, MAX_CLIP_PCT / 100);
+  if (next.track === 0 && Math.abs(next.gain - 1) < 1e-6) delete mix.clips[ev.key];
+  else
+    mix.clips[ev.key] = {
+      ...next,
+      artboard: S.abName,
+      animation: S.animName,
+      event: ev.event,
+      asset: ev.asset,
+      frame: ev.frame,
+      time: ev.time,
+      assetVolume: ev.volume ?? 1,
+    };
+  audio.applyClip(ev.key);
+  mixChanged();
+}
+
+function mixChanged({ save = true } = {}) {
+  mix.version++;
+  S.tlDirty = true;
+  renderTracks();
+  renderClips();
+  renderInspector();
+  if (save) scheduleMixSave();
+}
+
+function scheduleMixSave() {
+  mix.pending = true;
+  clearTimeout(mix.saveTimer);
+  mix.saveTimer = setTimeout(saveMix, 250);
+}
+
+async function saveMix() {
+  clearTimeout(mix.saveTimer);
+  mix.saveTimer = null;
+  try {
+    const res = await fetch('/api/mix', {
+      method: 'PUT',
+      headers: { 'x-client': notes.clientId },
+      body: JSON.stringify({ version: 1, tracks: mix.tracks, clips: mix.clips }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    if (!mix.saveTimer) mix.pending = false; // no newer edit queued meanwhile
+  } catch (err) {
+    toast(`Could not save the audio mix (${err.message || err})`, 3000);
+  }
+}
+
+async function loadMix() {
+  if (mix.pending) return; // our own unsaved edits win; they are saved in a moment
+  try {
+    const res = await fetch('/api/mix');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (Array.isArray(data.tracks) && data.tracks.length) mix.tracks = data.tracks.slice(0, MAX_TRACKS);
+    mix.clips = data.clips && typeof data.clips === 'object' ? data.clips : {};
+  } catch {
+    return;
+  }
+  mix.loaded = true;
+  audio.applyTracks();
+  for (const s of audio.sources) audio.applyClip(s.ev.key);
+  mixChanged({ save: false });
+}
+
+function addTrack() {
+  if (mix.tracks.length >= MAX_TRACKS) return toast(`Up to ${MAX_TRACKS} audio tracks`, 1400);
+  mix.tracks.push({ name: `Track ${mix.tracks.length + 1}`, volume: 1, muted: false, solo: false });
+  audio.applyTracks();
+  mixChanged();
+}
+
+function removeTrack(i) {
+  if (mix.tracks.length <= 1) return;
+  const name = mix.tracks[i].name;
+  mix.tracks.splice(i, 1);
+  // Its sound effects go to the track above (track 1 if it was the first); later tracks move up.
+  const dest = Math.max(0, i - 1);
+  for (const [key, c] of Object.entries(mix.clips)) {
+    if (c.track === i) c.track = dest;
+    else if (c.track > i) c.track--;
+    if (c.track === 0 && Math.abs(c.gain - 1) < 1e-6) delete mix.clips[key];
+  }
+  audio.applyTracks();
+  for (const s of audio.sources) audio.applyClip(s.ev.key);
+  mixChanged();
+  toast(`Removed ${name}; its sound effects moved to ${mix.tracks[dest].name}`, 2200);
+}
+
+function setTrack(i, patch) {
+  Object.assign(mix.tracks[i], patch);
+  audio.applyTracks();
+  mixChanged();
+}
+
+function selectedEvent() {
+  return mix.selected ? S.audioEvents.find((e) => e.key === mix.selected) ?? null : null;
+}
+
+function selectClip(key) {
+  mix.selected = key;
+  renderClips();
+  renderInspector();
+  S.tlDirty = true;
+}
+
+function moveSelected(delta) {
+  const ev = selectedEvent();
+  if (!ev) return false;
+  const to = clipTrack(ev) + delta;
+  if (to < 0) return true;
+  if (to >= mix.tracks.length) {
+    if (mix.tracks.length >= MAX_TRACKS) return true;
+    addTrack();
+  }
+  setClip(ev, { track: to });
+  toast(`${ev.event} → ${mix.tracks[to].name}`, 900);
+  return true;
+}
+
+// ---------------------------------------------------------------- collapsing the tracks
+// Collapsed, the timeline is just the ruler and a strip of ticks where sound effects fire.
+const tracksUI = { collapsed: false };
+
+function setTracksCollapsed(collapsed) {
+  tracksUI.collapsed = collapsed;
+  document.body.classList.toggle('tracks-collapsed', collapsed);
+  $('btn-collapse-tracks').setAttribute('aria-expanded', String(!collapsed));
+  $('btn-collapse-tracks').setAttribute('aria-label', collapsed ? 'Show audio tracks' : 'Hide audio tracks');
+  if (collapsed && mix.selected) selectClip(null);
+  renderTracks();
+  S.dirty = true;
+  S.tlDirty = true;
+  try {
+    localStorage.setItem('rvp:tracks-collapsed', collapsed ? '1' : '0');
+  } catch {}
+}
+
+$('btn-collapse-tracks').addEventListener('click', (e) => {
+  setTracksCollapsed(!tracksUI.collapsed);
+  e.currentTarget.blur();
+});
+
+// ---------------------------------------------------------------- track heads
+const ICON_TRASH = '<svg viewBox="0 0 16 16"><path d="M6 2h4l.5 1H13v1.4H3V3h2.5zM4 5.4h8l-.6 8.1a1 1 0 0 1-1 .9H5.6a1 1 0 0 1-1-.9z"/></svg>';
+
+function renderTracks() {
+  const list = $('track-list');
+  const n = mix.tracks.length;
+  document.documentElement.style.setProperty('--tracks', String(n));
+  while (list.children.length > n) list.lastElementChild.remove();
+  while (list.children.length < n) list.appendChild(makeTrackHead(list.children.length));
+  mix.tracks.forEach((t, i) => {
+    const el = list.children[i];
+    const name = el.querySelector('.th-name');
+    if (document.activeElement !== name) name.value = t.name;
+    name.setAttribute('aria-label', `Track ${i + 1} name`);
+    const m = el.querySelector('.th-mute');
+    m.classList.toggle('on', t.muted);
+    m.setAttribute('aria-pressed', String(t.muted));
+    m.setAttribute('aria-label', `Mute ${t.name}`);
+    const so = el.querySelector('.th-solo');
+    so.classList.toggle('on', t.solo);
+    so.setAttribute('aria-pressed', String(t.solo));
+    so.setAttribute('aria-label', `Solo ${t.name}`);
+    const vol = el.querySelector('.th-vol');
+    vol.value = String(Math.round(t.volume * 100));
+    vol.setAttribute('aria-label', `${t.name} volume`);
+    el.querySelector('.th-val').textContent = pctText(t.volume);
+    el.querySelector('.th-val').title = dbText(t.volume);
+    const del = el.querySelector('.th-del');
+    del.hidden = n <= 1;
+    del.setAttribute('aria-label', `Remove ${t.name}`);
+    el.classList.toggle('silent', trackLevel(i) === 0);
+  });
+  $('btn-add-track').disabled = n >= MAX_TRACKS;
+  $('tracks-count').textContent = tracksUI.collapsed ? ` · ${S.audioEvents.length} sound${S.audioEvents.length === 1 ? '' : 's'}` : '';
+}
+
+function makeTrackHead(i) {
+  const el = document.createElement('div');
+  el.className = 'track-head';
+  el.innerHTML = `
+    <span class="th-n">${i + 1}</span>
+    <input class="th-name" type="text" spellcheck="false" maxlength="40">
+    <button class="th-mute tbtn" title="Mute">M</button>
+    <button class="th-solo tbtn" title="Solo">S</button>
+    <input class="th-vol" type="range" min="0" max="150" step="1" title="Track volume">
+    <span class="th-val"></span>
+    <button class="th-del tbtn" title="Remove track">${ICON_TRASH}</button>`;
+  const idx = () => [...el.parentElement.children].indexOf(el);
+  const name = el.querySelector('.th-name');
+  name.addEventListener('input', () => {
+    mix.tracks[idx()].name = name.value.slice(0, 40);
+    mixChanged();
+  });
+  name.addEventListener('blur', () => {
+    if (!name.value.trim()) setTrack(idx(), { name: `Track ${idx() + 1}` });
+  });
+  name.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') name.blur();
+  });
+  el.querySelector('.th-mute').addEventListener('click', (e) => {
+    setTrack(idx(), { muted: !mix.tracks[idx()].muted });
+    e.currentTarget.blur();
+  });
+  el.querySelector('.th-solo').addEventListener('click', (e) => {
+    setTrack(idx(), { solo: !mix.tracks[idx()].solo });
+    e.currentTarget.blur();
+  });
+  el.querySelector('.th-vol').addEventListener('input', (e) => setTrack(idx(), { volume: Number(e.target.value) / 100 }));
+  el.querySelector('.th-vol').addEventListener('dblclick', () => setTrack(idx(), { volume: 1 }));
+  el.querySelector('.th-del').addEventListener('click', () => removeTrack(idx()));
+  return el;
+}
+
+// ---------------------------------------------------------------- clips on the timeline
+function renderClips() {
+  const layer = $('clips');
+  const existing = new Map([...layer.children].map((el) => [el.dataset.key, el]));
+  for (const ev of S.audioEvents) {
+    let el = existing.get(ev.key);
+    existing.delete(ev.key);
+    if (!el) {
+      el = document.createElement('button');
+      el.className = 'clip';
+      el.dataset.key = ev.key;
+      el.innerHTML = '<span class="clip-name"></span><span class="clip-gain"></span>';
+      el.addEventListener('pointerdown', (e) => startClipDrag(e, el));
+      el.addEventListener('click', (e) => {
+        // pointer clicks are handled on pointerup; this is for the keyboard (Enter / Space)
+        if (e.detail === 0) selectClip(el.dataset.key);
+      });
+      el.addEventListener('dblclick', () => {
+        const x = S.audioEvents.find((a) => a.key === el.dataset.key);
+        if (x) {
+          pause();
+          seek(x.time);
+        }
+      });
+      layer.appendChild(el);
+    }
+    const g = clipGain(ev);
+    const track = clipTrack(ev);
+    el.style.setProperty('--c', assetColor(ev.asset));
+    el.classList.toggle('selected', mix.selected === ev.key);
+    el.classList.toggle('silent', trackLevel(track) === 0 || clipLevel(ev) === 0);
+    el.querySelector('.clip-name').textContent = ev.event;
+    el.querySelector('.clip-gain').textContent = Math.abs(g - 1) > 1e-6 ? pctText(g) : '';
+    el.setAttribute('aria-label', `Sound effect ${ev.event} #${ev.nth + 1} at ${fmtTime(ev.time)}, ${mix.tracks[track].name}, volume ${pctText(g)}`);
+    el.setAttribute('aria-pressed', String(mix.selected === ev.key));
+    el.title = `${ev.event} · ${timecodeText(ev.time)} · ${mix.tracks[track].name} · ${pctText(g)}\nClick to adjust · drag to another track · double-click to jump here`;
+    el.dataset.track = String(track);
+  }
+  for (const el of existing.values()) el.remove();
+  if (mix.selected && !S.audioEvents.some((e) => e.key === mix.selected)) mix.selected = null;
+  // A clip that starts while the last top-labelled clip on its lane still sounds labels its lower row.
+  const topEnd = new Map(); // lane -> end time of the last clip labelled on the top row
+  for (const ev of S.audioEvents) {
+    const lane = clipTrack(ev);
+    const alt = ev.time < (topEnd.get(lane) ?? -Infinity) - EPS;
+    layer.querySelector(`[data-key="${CSS.escape(ev.key)}"]`)?.classList.toggle('alt', alt);
+    if (!alt) topEnd.set(lane, ev.time + clipDuration(ev));
+  }
+}
+
+function positionClips(w) {
+  if (tracksUI.collapsed) return;
+  const layer = $('clips');
+  const [va, vb] = viewRange();
+  // A clip's box ends where the next clip on its lane starts, so dense sounds (a run of
+  // pops, typing keys) never cover each other and each stays clickable. The waveform on the
+  // canvas still shows the whole sound; a cut box gets a fading right edge.
+  const next = new Map();
+  const lastOnLane = new Map();
+  for (const ev of S.audioEvents) {
+    const lane = clipTrack(ev);
+    const prev = lastOnLane.get(lane);
+    if (prev) next.set(prev.key, ev.time);
+    lastOnLane.set(lane, ev);
+  }
+  const els = new Map([...layer.children].map((el) => [el.dataset.key, el]));
+  for (const ev of S.audioEvents) {
+    const el = els.get(ev.key);
+    if (!el || el.classList.contains('dragging')) continue;
+    const end = Math.min(ev.time + clipDuration(ev), S.end);
+    const nextStart = next.get(ev.key) ?? Infinity;
+    const cut = nextStart < end;
+    const visible = ev.time <= vb && end >= va;
+    el.hidden = !visible;
+    if (!visible) continue;
+    const x0 = tToX(ev.time, w);
+    const left = Math.max(TL.pad - 2, x0);
+    const right = Math.min(tToX(Math.min(end, nextStart), w), w - TL.pad + 2);
+    const room = nextStart === Infinity ? Infinity : tToX(nextStart, w) - left;
+    el.style.left = `${left}px`;
+    el.style.width = `${Math.max(2, Math.min(room, Math.max(8, right - left)))}px`;
+    el.style.top = `${laneY(clipTrack(ev))}px`;
+    el.style.height = `${TL.laneH}px`;
+    el.classList.toggle('cut', cut);
+    el.classList.toggle('narrow', right - left < 14);
+  }
+}
+
+function laneY(i) {
+  return TL.lanesTop + i * (TL.laneH + TL.laneGap);
+}
+
+function laneAt(clientY) {
+  const y = clientY - tl.getBoundingClientRect().top - TL.lanesTop;
+  return clamp(Math.floor(y / (TL.laneH + TL.laneGap)), 0, mix.tracks.length - 1);
+}
+
+let clipDrag = null;
+function startClipDrag(e, el) {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+  e.preventDefault();
+  el.setPointerCapture(e.pointerId);
+  const ev = S.audioEvents.find((a) => a.key === el.dataset.key);
+  if (!ev) return;
+  clipDrag = { el, ev, startY: e.clientY, from: clipTrack(ev), to: clipTrack(ev), moved: false };
+  const move = (m) => {
+    if (!clipDrag) return;
+    if (Math.abs(m.clientY - clipDrag.startY) > 4) clipDrag.moved = true;
+    if (!clipDrag.moved) return;
+    el.classList.add('dragging');
+    clipDrag.to = laneAt(m.clientY);
+    el.style.top = `${laneY(clipDrag.to)}px`;
+    S.dropLane = clipDrag.to;
+    S.tlDirty = true;
+  };
+  const up = () => {
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointerup', up);
+    el.removeEventListener('pointercancel', up);
+    const d = clipDrag;
+    clipDrag = null;
+    S.dropLane = null;
+    el.classList.remove('dragging');
+    mix.selected = d.ev.key;
+    if (d.moved && d.to !== d.from) {
+      setClip(d.ev, { track: d.to });
+      toast(`${d.ev.event} → ${mix.tracks[d.to].name}`, 900);
+    } else selectClip(d.ev.key);
+    S.tlDirty = true;
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+
+// ---------------------------------------------------------------- inspector
+function renderInspector() {
+  const box = $('clip-inspector');
+  const ev = selectedEvent();
+  box.hidden = !ev;
+  if (!ev) return;
+  const g = clipGain(ev);
+  const track = clipTrack(ev);
+  $('ci-dot').style.background = assetColor(ev.asset);
+  $('ci-name').textContent = `${ev.event} #${ev.nth + 1}`;
+  $('ci-time').textContent = timecodeText(ev.time);
+  $('ci-asset').textContent = `${mix.tracks[track].name} · asset “${ev.asset}” · asset volume ${Number((ev.volume ?? 1).toFixed(3))}`;
+  const pct = Math.round(g * 100);
+  if (document.activeElement !== $('ci-gain')) $('ci-gain').value = String(Math.round(pct / CLIP_STEP_PCT) * CLIP_STEP_PCT);
+  $('ci-gain').setAttribute('aria-valuetext', `${pct}%`);
+  $('ci-pct').textContent = `${pct}%`;
+  $('ci-db').textContent = dbText(g);
+  const all = S.audioEvents.filter((e) => e.event === ev.event);
+  $('ci-all').hidden = all.length < 2;
+  $('ci-all').textContent = `Apply to all ${all.length} “${ev.event}”`;
+  $('ci-reset').disabled = track === 0 && Math.abs(g - 1) < 1e-6;
+}
+
+function setSelectedGainPct(v) {
+  const ev = selectedEvent();
+  if (!ev || !Number.isFinite(v)) return;
+  setClip(ev, { gain: clamp(v, 0, MAX_CLIP_PCT) / 100 });
+}
+
+$('ci-gain').addEventListener('input', (e) => setSelectedGainPct(Math.round(Number(e.target.value) / CLIP_STEP_PCT) * CLIP_STEP_PCT));
+$('ci-gain').addEventListener('dblclick', () => setSelectedGainPct(100));
+$('ci-reset').addEventListener('click', () => {
+  const ev = selectedEvent();
+  if (ev) setClip(ev, { track: 0, gain: 1 });
+});
+$('ci-all').addEventListener('click', () => {
+  const ev = selectedEvent();
+  if (!ev) return;
+  const patch = { track: clipTrack(ev), gain: clipGain(ev) };
+  const all = S.audioEvents.filter((e) => e.event === ev.event);
+  for (const e of all) setClip(e, patch);
+  toast(`All ${all.length} “${ev.event}” → ${mix.tracks[patch.track].name} at ${pctText(patch.gain)}`, 1600);
+});
+$('ci-time').addEventListener('click', () => {
+  const ev = selectedEvent();
+  if (ev) {
+    pause();
+    seek(ev.time);
+  }
+});
+$('ci-close').addEventListener('click', () => selectClip(null));
+$('btn-add-track').addEventListener('click', (e) => {
+  addTrack();
+  e.currentTarget.blur();
+});
+
 // ================================================================ audio
 const audio = {
   ctx: null,
@@ -98,18 +561,47 @@ const audio = {
   muted: false,
   version: 0,
 
+  trackGains: [], // one GainNode per possible track, feeding the master
+
   ensure() {
     if (!this.ctx) {
       this.ctx = new AudioContext({ latencyHint: 'interactive' });
       this.master = this.ctx.createGain();
       this.master.connect(this.ctx.destination);
+      this.trackGains = Array.from({ length: MAX_TRACKS }, () => {
+        const g = this.ctx.createGain();
+        g.connect(this.master);
+        return g;
+      });
       this.applyVolume();
+      this.applyTracks();
     }
     return this.ctx;
   },
 
   applyVolume() {
     if (this.master) this.master.gain.value = this.muted ? 0 : Number($('volume').value);
+  },
+
+  /** Track volume, mute and solo -> the track gain nodes. */
+  applyTracks() {
+    if (!this.ctx) return;
+    this.trackGains.forEach((g, i) => g.gain.setTargetAtTime(trackLevel(i), this.ctx.currentTime, 0.012));
+  },
+
+  /** A clip's gain or track changed: update the sounds already playing, without a restart. */
+  applyClip(key) {
+    if (!this.ctx) return;
+    for (const s of this.sources) {
+      if (s.ev.key !== key) continue;
+      s.gain.gain.setTargetAtTime(clipLevel(s.ev), this.ctx.currentTime, 0.012);
+      const track = clipTrack(s.ev);
+      if (track !== s.track) {
+        s.gain.disconnect();
+        s.gain.connect(this.trackGains[track]);
+        s.track = track;
+      }
+    }
   },
 
   async load(bytesByName) {
@@ -135,9 +627,10 @@ const audio = {
   stopAll() {
     for (const s of this.sources) {
       try {
-        s.stop();
+        s.src.stop();
       } catch {}
-      s.disconnect();
+      s.src.disconnect();
+      s.gain.disconnect();
     }
     this.sources = [];
   },
@@ -162,12 +655,13 @@ const audio = {
       src.buffer = buf;
       src.playbackRate.value = rate;
       const gain = this.ctx.createGain();
-      gain.gain.value = ev.volume ?? 1;
-      src.connect(gain).connect(this.master);
+      gain.gain.value = clipLevel(ev);
+      const track = clipTrack(ev);
+      src.connect(gain).connect(this.trackGains[track]);
       // Cut sounds at the end of the playback range so loops stay clean.
       const maxDur = (untilT - Math.max(fromT, ev.time)) * 1; // in buffer seconds (rate cancels out)
       src.start(at, offset, Math.max(0, Math.min(buf.duration - offset, maxDur)));
-      this.sources.push(src);
+      this.sources.push({ src, gain, ev, track });
     }
   },
 };
@@ -316,6 +810,7 @@ async function loadBuild(version) {
 
   await audio.load(audioBytes);
   populateSelectors();
+  renderClips();
 
   const abName = pickArtboard(prev.ab ?? initial.artboard);
   const animName = pickAnimation(abName, prev.anim ?? initial.animation);
@@ -389,7 +884,7 @@ function selectAnimation(abName, animName, { keepTime = false } = {}) {
     S.fps = metaAnim.fps;
     S.start = metaAnim.startFrame / S.fps;
     S.end = metaAnim.endFrame / S.fps;
-    S.audioEvents = metaAnim.audio;
+    S.audioEvents = keyAudioEvents(metaAnim.audio, abName, animName);
   } else if (S.anim) {
     // Raw .riv: the low-level instance exposes no duration/fps, so measure it.
     S.fps = 60;
@@ -420,6 +915,10 @@ function selectAnimation(abName, animName, { keepTime = false } = {}) {
   }
   S.dirty = true;
   S.tlDirty = true;
+  assignAssetColors();
+  renderTracks();
+  renderClips();
+  renderInspector();
   updateRangeUI();
   if (wasPlaying) play();
   else updateTransportUI();
@@ -494,7 +993,7 @@ function drawStage() {
 // ================================================================ timeline
 const tl = $('timeline');
 const tlc = $('timeline-canvas');
-const TL = { pad: 12, rulerH: 20, waveTop: 24, waveH: 40, evTop: 68, evH: 12 };
+const TL = { pad: 12, rulerH: 20, lanesTop: 24, laneH: 36, laneGap: 4, stripH: 12 };
 let waveCache = null;
 
 function viewRange() {
@@ -536,14 +1035,22 @@ function fmtShort(sec) {
   return `${m}:${pad(s)}`;
 }
 
+// Distinct hues for the assets of the current animation, in the order they first fire.
+const ASSET_PALETTE = ['#e0679a', '#5fb8e8', '#7bcf6e', '#e8a64f', '#a98af0', '#e8d35a', '#5fd1bd', '#ef7a62'];
+let assetColors = new Map();
+function assignAssetColors() {
+  assetColors = new Map();
+  for (const ev of S.audioEvents) if (!assetColors.has(ev.asset)) assetColors.set(ev.asset, ASSET_PALETTE[assetColors.size % ASSET_PALETTE.length]);
+}
 function assetColor(name) {
+  if (assetColors.has(name)) return assetColors.get(name);
   let h = 0;
   for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return `hsl(${h % 360} 65% 62%)`;
 }
 
 function renderWave(w, h, dpr) {
-  const key = [w, h, dpr, ...viewRange(), audio.version, S.abName, S.animName, S.audioEvents.length].join('|');
+  const key = [w, h, dpr, ...viewRange(), audio.version, mix.version, tracksUI.collapsed, S.abName, S.animName, S.audioEvents.length].join('|');
   if (waveCache?.key === key) return waveCache.canvas;
   const c = waveCache?.canvas ?? document.createElement('canvas');
   c.width = w * dpr;
@@ -551,52 +1058,62 @@ function renderWave(w, h, dpr) {
   const g = c.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
-  const mid = TL.waveTop + TL.waveH / 2;
-  g.fillStyle = '#1e1e22';
-  g.fillRect(TL.pad, TL.waveTop, w - 2 * TL.pad, TL.waveH);
+  const x0 = TL.pad;
+  const x1 = w - TL.pad;
 
-  const events = S.audioEvents.filter((e) => audio.peaks.has(e.asset));
-  if (events.length) {
-    g.fillStyle = '#6f7c94';
-    const x0 = TL.pad;
-    const x1 = w - TL.pad;
-    for (let x = x0; x < x1; x++) {
-      const ta = xToT(x, w);
-      const tb = xToT(x + 1, w);
-      let amp = 0;
-      for (const ev of events) {
-        const pk = audio.peaks.get(ev.asset);
-        const a = ta - ev.time;
-        const b = tb - ev.time;
-        const len = pk.length / PEAK_RATE;
-        if (b < 0 || a > len) continue;
-        const i0 = Math.max(0, Math.floor(a * PEAK_RATE));
-        const i1 = Math.min(pk.length, Math.max(i0 + 1, Math.ceil(b * PEAK_RATE)));
-        let m = 0;
-        for (let i = i0; i < i1; i++) if (pk[i] > m) m = pk[i];
-        amp += m * (ev.volume ?? 1);
-      }
+  if (tracksUI.collapsed) {
+    g.fillStyle = '#1e1e22';
+    g.fillRect(x0, TL.lanesTop, x1 - x0, TL.stripH);
+    for (const ev of S.audioEvents) {
+      const x = Math.round(tToX(ev.time, w));
+      if (x < x0 - 1 || x > x1 + 1) continue;
+      g.fillStyle = assetColor(ev.asset);
+      g.globalAlpha = clipLevel(ev) * trackLevel(clipTrack(ev)) === 0 ? 0.3 : 1;
+      g.fillRect(x - 1, TL.lanesTop + 1, 2, TL.stripH - 2);
+    }
+    g.globalAlpha = 1;
+    waveCache = { key, canvas: c };
+    return c;
+  }
+
+  // one lane per track; each sound effect draws its own waveform, scaled by its level
+  for (let i = 0; i < mix.tracks.length; i++) {
+    g.fillStyle = trackLevel(i) === 0 ? '#19191c' : '#1e1e22';
+    g.fillRect(x0, laneY(i), x1 - x0, TL.laneH);
+  }
+  for (const ev of S.audioEvents) {
+    const pk = audio.peaks.get(ev.asset);
+    if (!pk) continue;
+    const lane = clipTrack(ev);
+    const mid = laneY(lane) + TL.laneH / 2;
+    const level = clipLevel(ev) * trackLevel(lane);
+    const len = pk.length / PEAK_RATE;
+    const xa = Math.max(x0, Math.floor(tToX(ev.time, w)));
+    const xb = Math.min(x1, Math.ceil(tToX(ev.time + len, w)));
+    g.fillStyle = assetColor(ev.asset);
+    g.globalAlpha = level === 0 ? 0.25 : 0.75;
+    const shown = level === 0 ? clipLevel(ev) : level;
+    for (let x = xa; x < xb; x++) {
+      const a = xToT(x, w) - ev.time;
+      const b = xToT(x + 1, w) - ev.time;
+      if (b < 0 || a > len) continue;
+      const i0 = Math.max(0, Math.floor(a * PEAK_RATE));
+      const i1 = Math.min(pk.length, Math.max(i0 + 1, Math.ceil(b * PEAK_RATE)));
+      let m = 0;
+      for (let i = i0; i < i1; i++) if (pk[i] > m) m = pk[i];
+      const amp = m * shown;
       if (amp > 0) {
-        const hh = Math.max(0.5, Math.pow(Math.min(1, amp), 0.7) * (TL.waveH / 2 - 2));
+        const hh = Math.max(0.5, Math.pow(Math.min(1, amp), 0.7) * (TL.laneH / 2 - 3));
         g.fillRect(x, mid - hh, 1, hh * 2);
       }
     }
-  } else {
+    g.globalAlpha = 1;
+  }
+  if (!S.audioEvents.length) {
     g.fillStyle = '#4a4a52';
     g.font = '11px -apple-system, system-ui, sans-serif';
     g.textBaseline = 'middle';
-    g.fillText(S.meta ? 'no audio events in this animation' : 'audio timing unavailable for a raw .riv', TL.pad + 8, mid);
-  }
-
-  // event markers
-  for (const ev of S.audioEvents) {
-    const x = Math.round(tToX(ev.time, w)) + 0.5;
-    if (x < TL.pad - 1 || x > w - TL.pad + 1) continue;
-    g.fillStyle = assetColor(ev.asset);
-    g.fillRect(x - 0.5, TL.evTop, 1.5, TL.evH);
-    g.beginPath();
-    g.arc(x, TL.evTop + 2, 2.2, 0, Math.PI * 2);
-    g.fill();
+    g.fillText(S.meta ? 'no audio events in this animation' : 'audio timing unavailable for a raw .riv', TL.pad + 8, laneY(0) + TL.laneH / 2);
   }
   waveCache = { key, canvas: c };
   return c;
@@ -634,6 +1151,12 @@ function drawTimeline() {
   }
 
   g.drawImage(renderWave(w, h, dpr), 0, 0, w, h);
+  if (S.dropLane != null) {
+    g.strokeStyle = '#5b8def';
+    g.lineWidth = 1.5;
+    g.strokeRect(TL.pad + 0.75, laneY(S.dropLane) + 0.75, w - 2 * TL.pad - 1.5, TL.laneH - 1.5);
+  }
+  positionClips(w);
 
   // in/out range
   if (S.inPt != null || S.outPt != null) {
@@ -723,6 +1246,7 @@ function pan(dt) {
   S.view = [na, na + span];
 }
 
+const localX = (e) => e.clientX - tl.getBoundingClientRect().left;
 let scrubWasPlaying = false;
 tl.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !S.anim) return;
@@ -730,10 +1254,10 @@ tl.addEventListener('pointerdown', (e) => {
   S.scrubbing = true;
   scrubWasPlaying = S.playing;
   if (S.playing) pause();
-  seek(xToT(e.offsetX, tl.clientWidth));
+  seek(xToT(localX(e), tl.clientWidth));
 });
 tl.addEventListener('pointermove', (e) => {
-  const t = clamp(xToT(e.offsetX, tl.clientWidth), S.start, S.end);
+  const t = clamp(xToT(localX(e), tl.clientWidth), S.start, S.end);
   S.hoverT = t;
   if (S.scrubbing) seek(t);
   S.tlDirty = true;
@@ -751,7 +1275,7 @@ tl.addEventListener('pointerleave', () => {
   S.tlDirty = true;
 });
 tl.addEventListener('dblclick', (e) => {
-  if (e.offsetY <= TL.rulerH + 4) {
+  if (e.clientY - tl.getBoundingClientRect().top <= TL.rulerH + 4) {
     S.view = null;
     S.tlDirty = true;
   }
@@ -767,7 +1291,7 @@ tl.addEventListener(
       pan((e.shiftKey ? e.deltaY || e.deltaX : e.deltaX) * secPerPx);
     } else {
       const k = e.ctrlKey ? 0.01 : 0.0025;
-      zoomAt(xToT(e.offsetX, w), Math.exp(e.deltaY * k));
+      zoomAt(xToT(localX(e), w), Math.exp(e.deltaY * k));
     }
     S.tlDirty = true;
   },
@@ -953,7 +1477,8 @@ function toggleMute() {
 
 window.addEventListener('keydown', (e) => {
   const tgt = e.target;
-  if ((tgt instanceof HTMLInputElement && tgt.type === 'text') || tgt instanceof HTMLTextAreaElement) {
+  if (tgt instanceof HTMLInputElement && tgt.type === 'range' && e.key.startsWith('Arrow')) return; // the slider's own keys
+  if ((tgt instanceof HTMLInputElement && (tgt.type === 'text' || tgt.type === 'number')) || tgt instanceof HTMLTextAreaElement) {
     // Typing a note: Esc leaves the field, Cmd/Ctrl+Enter finishes it (and sends from the overall note).
     if (e.key === 'Escape') tgt.blur();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && tgt instanceof HTMLTextAreaElement) {
@@ -1040,8 +1565,19 @@ window.addEventListener('keydown', (e) => {
     case '?':
       $('help').hidden = !$('help').hidden;
       break;
+    case 'a':
+    case 'A':
+      setTracksCollapsed(!tracksUI.collapsed);
+      break;
+    case 'ArrowUp':
+      handled = moveSelected(-1);
+      break;
+    case 'ArrowDown':
+      handled = moveSelected(1);
+      break;
     case 'Escape':
-      $('help').hidden = true;
+      if (!$('help').hidden) $('help').hidden = true;
+      else if (mix.selected) selectClip(null);
       break;
     default:
       handled = false;
@@ -1494,6 +2030,8 @@ function connect() {
     } else if (msg.type === 'shots') {
       if (msg.from !== notes.clientId) loadShots();
       refreshShareStatus();
+    } else if (msg.type === 'mix') {
+      if (msg.from !== notes.clientId) loadMix();
     } else if (msg.type === 'seek') {
       loading.then(() => {
         const t = parseTime(msg.at, S.fps);
@@ -1508,12 +2046,17 @@ function connect() {
   es.onerror = () => setStatus('err', 'disconnected — is rive-video-preview running?');
   es.onopen = () => {
     loadShots();
+    loadMix();
     refreshShareStatus();
   };
 }
 
 // ================================================================ boot
 (async () => {
+  try {
+    if (localStorage.getItem('rvp:tracks-collapsed') === '1') setTracksCollapsed(true);
+  } catch {}
+  renderTracks();
   updateTransportUI();
   if (S.mutedPref) {
     audio.muted = true;
@@ -1528,4 +2071,4 @@ function connect() {
 });
 
 // Exposed for debugging / automation.
-window.rvp = { S, audio, seek, play, pause, timecodeText, parseTime, takeScreenshot, notes };
+window.rvp = { S, audio, mix, seek, play, pause, timecodeText, parseTime, takeScreenshot, notes };

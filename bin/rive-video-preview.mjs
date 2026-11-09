@@ -34,6 +34,7 @@ player keys:
   space play/pause · ←/→ frame · shift+←/→ 1s · home/end · i/o in/out · x clear range
   c copy timecode · shift+c copy range · g go to time · l loop · m mute · f fullscreen · ? help
   s screenshot this frame · n screenshots & notes panel
+  click a sound effect to set its volume · drag or ↑/↓ moves it between tracks (up to 3) · a hides tracks
 
 feedback for agents:
   Screenshots and notes are kept in <project>/.rive-preview/. "Send to agent" writes a
