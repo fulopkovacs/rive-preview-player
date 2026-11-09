@@ -41,11 +41,50 @@ running. With `--at`, the open window jumps to that time.
 | Shift+C | copy range: `00:10.000–00:12.500 (frames 600–750)` |
 | G | go to time (or double-click the timecode) |
 | L / M / F | loop / mute / fullscreen |
+| S | screenshot the current frame and open its note |
+| N | show / hide the screenshots & notes panel |
 
 To copy the playhead time you can also click the timecode. Each copied timecode is also
 printed in the terminal running the player. Scroll on the timeline to zoom, Shift-scroll
 or a horizontal scroll pans, and a double-click on the ruler resets the zoom. The waveform
 lane is a mix of all audio events, and the coloured ticks mark where each event fires.
+
+## Screenshots, notes and the coding agent
+
+Press **S** (or the camera button) to screenshot the frame under the playhead. The panel on
+the right lists every screenshot with its timecode and a note field: write what should change,
+and edit it as often as you like (notes save as you type; Esc leaves the field). Click a
+thumbnail or its timecode to jump back to that frame. When you are done, add an optional
+overall note and press **Send to agent** (Cmd+Enter in the overall note does the same).
+
+Sending writes a bundle to `<project>/.rive-preview/feedback/<date_time>/`:
+`feedback.md` (notes, timecodes and image paths), `feedback.json`, and the PNGs, each cropped to
+the artboard. A ready-made prompt for the agent is copied to the clipboard, and the panel shows
+when the agent has read the bundle. `.rive-preview/` gets its own `.gitignore`, so nothing in it is committed.
+
+### MCP server
+
+`rive-video-preview mcp` is a stdio MCP server that gives the agent the bundles, images included:
+
+| Tool | |
+|---|---|
+| `get_feedback` | unread bundles (notes, timecodes, artboard/animation, images); marks them read |
+| `wait_for_feedback` | blocks until you press Send to agent (default timeout 600s), then returns it |
+| `seek_player` | moves the open player to a time, e.g. to show the frame it changed |
+
+```bash
+claude mcp add rive-preview -- rive-video-preview mcp            # Claude Code, project in cwd
+claude mcp add rive-preview -- rive-video-preview mcp path/to/project
+```
+
+```json
+{ "mcpServers": { "rive-preview": { "command": "rive-video-preview", "args": ["mcp"] } } }
+```
+
+It finds the project from the tool's `project` argument, the dir given after `mcp`, a
+`rive.yaml` at or above the working directory, one directly below it, or the only running player.
+It reads bundles from disk, so the player does not have to be running; only `seek_player` needs it.
+Agents without MCP can read the `feedback.md` path from the copied prompt.
 
 ## Snippet for a project's AGENTS.md
 
@@ -58,6 +97,9 @@ lane is a mix of all audio events, and the coloured ticks mark where each event 
   f741). This moves the playhead of the player that is already open.
 - Timecodes the user pastes look like `00:12.350 (frame 741)`, which is seconds into
   the animation and the frame at its fps.
+- The user can screenshot frames, add notes and press "Send to agent". Read that with the
+  `get_feedback` MCP tool (or `wait_for_feedback` after asking for a review), or from
+  `.rive-preview/feedback/*/feedback.md`.
 ```
 
 ## Limits
@@ -75,5 +117,5 @@ lane is a mix of all audio events, and the coloured ticks mark where each event 
 ## Install
 
 ```bash
-npm install && npm link    # puts `rive-video-preview` on PATH
+pnpm install && pnpm link --global    # puts `rive-video-preview` on PATH
 ```

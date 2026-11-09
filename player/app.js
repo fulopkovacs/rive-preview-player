@@ -952,7 +952,17 @@ function toggleMute() {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement && e.target.type === 'text') return;
+  const tgt = e.target;
+  if ((tgt instanceof HTMLInputElement && tgt.type === 'text') || tgt instanceof HTMLTextAreaElement) {
+    // Typing a note: Esc leaves the field, Cmd/Ctrl+Enter finishes it (and sends from the overall note).
+    if (e.key === 'Escape') tgt.blur();
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && tgt instanceof HTMLTextAreaElement) {
+      e.preventDefault();
+      tgt.blur();
+      if (tgt.id === 'share-message') shareShots();
+    }
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key;
   let handled = true;
@@ -1019,6 +1029,14 @@ window.addEventListener('keydown', (e) => {
     case 'F':
       document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
       break;
+    case 's':
+    case 'S':
+      takeScreenshot();
+      break;
+    case 'n':
+    case 'N':
+      setNotesOpen(!notes.open);
+      break;
     case '?':
       $('help').hidden = !$('help').hidden;
       break;
@@ -1038,6 +1056,317 @@ new ResizeObserver(() => {
   S.dirty = true;
   S.tlDirty = true;
 }).observe(document.body);
+
+// ================================================================ screenshots & notes
+// Shots are kept by the server in <project>/.rive-preview/drafts until "Send to agent"
+// moves them into a feedback bundle that the MCP server hands to the coding agent.
+const notes = {
+  shots: [],
+  open: false,
+  pending: new Map(), // id -> unsaved note text
+  timers: new Map(), // id -> debounce timer
+  clientId: Math.random().toString(36).slice(2),
+  lastBundle: null,
+  watchTimer: null,
+};
+const ICON_X = '<svg viewBox="0 0 16 16"><path d="M4.2 3.1 8 6.9l3.8-3.8 1.1 1.1L9.1 8l3.8 3.8-1.1 1.1L8 9.1l-3.8 3.8-1.1-1.1L6.9 8 3.1 4.2z"/></svg>';
+const MAX_SHOT_EDGE = 1600;
+
+function setNotesOpen(open) {
+  notes.open = open;
+  $('notes').hidden = !open;
+  $('btn-notes').classList.toggle('on', open);
+  S.dirty = true;
+  try {
+    localStorage.setItem('rvp:notes-open', open ? '1' : '0');
+  } catch {}
+}
+
+/** Crop the drawn artboard out of the stage canvas (scaled to at most MAX_SHOT_EDGE). */
+function cropStage() {
+  const cw = canvas.width;
+  const ch = canvas.height;
+  const b = S.artboard.bounds;
+  const aw = b.maxX - b.minX;
+  const ah = b.maxY - b.minY;
+  let sx = 0, sy = 0, sw = cw, sh = ch;
+  if (aw > 0 && ah > 0) {
+    const k = Math.min(cw / aw, ch / ah);
+    sw = aw * k;
+    sh = ah * k;
+    sx = (cw - sw) / 2;
+    sy = (ch - sh) / 2;
+  }
+  const k = Math.min(1, MAX_SHOT_EDGE / Math.max(sw, sh));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(sw * k));
+  out.height = Math.max(1, Math.round(sh * k));
+  const g = out.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--stage').trim() || '#141416';
+  g.fillRect(0, 0, out.width, out.height);
+  g.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  return out;
+}
+
+function looksBlank(c) {
+  const g = c.getContext('2d', { willReadFrequently: true });
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  const step = Math.max(4, Math.floor(d.length / 4 / 4000) * 4);
+  for (let i = 4; i < d.length; i += step) if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) return false;
+  return true;
+}
+
+/** Draw the current frame and grab it. Retries on the next frames in case the GL buffer was already presented. */
+function captureFrame() {
+  return new Promise((resolve) => {
+    let tries = 0;
+    const attempt = () => {
+      drawStage();
+      const out = cropStage();
+      if (!looksBlank(out) || ++tries >= 3) resolve(out);
+      else S.rive.requestAnimationFrame(attempt);
+    };
+    attempt();
+  });
+}
+
+async function takeScreenshot() {
+  if (!S.artboard) return toast('Nothing to capture yet');
+  if (S.playing) pause();
+  const t = snap(S.t);
+  S.t = t;
+  const img = await captureFrame();
+  const res = await fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'x-client': notes.clientId },
+    body: JSON.stringify({
+      image: img.toDataURL('image/png'),
+      time: t,
+      frame: frameOf(t),
+      fps: S.fps,
+      timecode: timecodeText(t),
+      artboard: S.abName,
+      animation: S.animName,
+      width: img.width,
+      height: img.height,
+    }),
+  });
+  if (!res.ok) return toast(`Screenshot failed: ${await res.text()}`, 3000);
+  const shot = await res.json();
+  if (!notes.open) setNotesOpen(true);
+  await loadShots();
+  const card = $('shot-list').querySelector(`[data-id="${shot.id}"]`);
+  if (card) {
+    card.classList.add('fresh');
+    setTimeout(() => card.classList.remove('fresh'), 1500);
+    card.scrollIntoView({ block: 'nearest' });
+    card.querySelector('textarea').focus();
+  }
+  toast(`Screenshot  ${shot.timecode} — write a note`);
+}
+
+async function loadShots() {
+  try {
+    const res = await fetch('/api/shots');
+    notes.shots = (await res.json()).shots || [];
+  } catch {
+    return;
+  }
+  renderShots();
+}
+
+function shotWhere(s) {
+  const parts = [];
+  if (s.artboard && artboardNamesSafe().length > 1) parts.push(s.artboard);
+  if (s.animation) parts.push(s.animation);
+  return parts.join(' / ');
+}
+function artboardNamesSafe() {
+  try {
+    return S.file ? artboardNames() : [];
+  } catch {
+    return [];
+  }
+}
+
+function makeCard(s) {
+  const el = document.createElement('div');
+  el.className = 'shot';
+  el.dataset.id = s.id;
+  el.innerHTML = `
+    <img class="shot-img" alt="" title="Jump to this frame" draggable="false">
+    <div class="shot-bar">
+      <span class="shot-n"></span>
+      <button class="shot-tc" title="Jump to this frame"></button>
+      <span class="shot-where"></span>
+      <button class="shot-del" title="Delete screenshot" aria-label="Delete screenshot">${ICON_X}</button>
+    </div>
+    <textarea rows="3" placeholder="What should change here?" spellcheck="true"></textarea>`;
+  el.querySelector('img').src = s.url;
+  el.querySelector('.shot-tc').textContent = s.timecode;
+  const ta = el.querySelector('textarea');
+  ta.value = s.note || '';
+  ta.addEventListener('input', () => scheduleSave(s.id, ta.value));
+  ta.addEventListener('blur', () => saveNote(s.id));
+  const jump = () => jumpToShot(notes.shots.find((x) => x.id === s.id) || s);
+  el.querySelector('img').addEventListener('click', jump);
+  el.querySelector('.shot-tc').addEventListener('click', jump);
+  el.querySelector('.shot-del').addEventListener('click', () => deleteShot(s.id));
+  return el;
+}
+
+function renderShots() {
+  const list = $('shot-list');
+  const existing = new Map([...list.children].map((el) => [el.dataset.id, el]));
+  notes.shots.forEach((s, i) => {
+    let el = existing.get(s.id);
+    existing.delete(s.id);
+    if (!el) el = makeCard(s);
+    if (list.children[i] !== el) list.insertBefore(el, list.children[i] ?? null);
+    el.querySelector('.shot-n').textContent = `#${i + 1}`;
+    el.querySelector('.shot-where').textContent = shotWhere(s);
+    const ta = el.querySelector('textarea');
+    // Don't clobber what is being typed.
+    if (document.activeElement !== ta && !notes.pending.has(s.id) && ta.value !== (s.note || '')) ta.value = s.note || '';
+  });
+  for (const el of existing.values()) el.remove();
+  const n = notes.shots.length;
+  $('notes-count').textContent = n ? String(n) : '';
+  $('shot-empty').hidden = n > 0;
+  $('btn-share').disabled = n === 0;
+  $('btn-share').textContent = n ? `Send ${n} screenshot${n === 1 ? '' : 's'} to agent` : 'Send to agent';
+}
+
+function jumpToShot(s) {
+  if (!S.file) return;
+  if ((s.artboard && s.artboard !== S.abName) || (s.animation && s.animation !== S.animName)) {
+    const ab = artboardNames().includes(s.artboard) ? s.artboard : S.abName;
+    const anim = animationNames(ab).includes(s.animation) ? s.animation : pickAnimation(ab, null);
+    selectAnimation(ab, anim, { keepTime: true });
+  }
+  pause();
+  seek(s.time ?? S.t);
+}
+
+function scheduleSave(id, note) {
+  notes.pending.set(id, note);
+  clearTimeout(notes.timers.get(id));
+  notes.timers.set(id, setTimeout(() => saveNote(id), 400));
+}
+
+async function saveNote(id) {
+  clearTimeout(notes.timers.get(id));
+  notes.timers.delete(id);
+  if (!notes.pending.has(id)) return;
+  const note = notes.pending.get(id);
+  notes.pending.delete(id);
+  const shot = notes.shots.find((s) => s.id === id);
+  if (shot) shot.note = note;
+  try {
+    await fetch(`/api/shots/${id}`, { method: 'PATCH', headers: { 'x-client': notes.clientId }, body: JSON.stringify({ note }) });
+  } catch {
+    toast('Could not save the note — is rive-video-preview running?', 3000);
+  }
+}
+
+const flushSaves = () => Promise.all([...notes.pending.keys()].map(saveNote));
+
+async function deleteShot(id) {
+  const shot = notes.shots.find((s) => s.id === id);
+  const note = notes.pending.get(id) ?? shot?.note ?? '';
+  if (note.trim() && !confirm('Delete this screenshot and its note?')) return;
+  clearTimeout(notes.timers.get(id));
+  notes.pending.delete(id);
+  notes.shots = notes.shots.filter((s) => s.id !== id);
+  renderShots();
+  await fetch(`/api/shots/${id}`, { method: 'DELETE' }).catch(() => {});
+}
+
+async function shareShots() {
+  if (!notes.shots.length) return;
+  const btn = $('btn-share');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  await flushSaves();
+  let bundle;
+  try {
+    const res = await fetch('/api/share', { method: 'POST', body: JSON.stringify({ message: $('share-message').value }) });
+    bundle = await res.json();
+    if (!res.ok) throw new Error(bundle.error || res.statusText);
+  } catch (err) {
+    toast(`Could not send: ${err.message || err}`, 3000);
+    renderShots();
+    return;
+  }
+  $('share-message').value = '';
+  saveMessageDraft();
+  const n = bundle.shots.length;
+  const prompt = `I left feedback on the Rive animation in the preview player (${n} screenshot${n === 1 ? '' : 's'} with notes). Read it with the rive-preview MCP tool get_feedback, or from ${bundle.markdown}`;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(prompt);
+    copied = true;
+  } catch {}
+  notes.lastBundle = { id: bundle.id, createdAt: bundle.createdAt, markdown: bundle.markdown, count: n, consumed: null, copied };
+  renderShareStatus();
+  watchBundle();
+  toast(copied ? `Sent ${n} to the agent · prompt copied` : `Sent ${n} to the agent`, 2400);
+  await loadShots();
+}
+
+function renderShareStatus() {
+  const el = $('share-status');
+  const b = notes.lastBundle;
+  if (!b) return (el.innerHTML = '');
+  const when = new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const what = `${b.count} screenshot${b.count === 1 ? '' : 's'}`;
+  if (b.consumed) {
+    const at = new Date(b.consumed.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML = `<span class="ok">✓ The agent read the ${what} you sent at ${when}</span> (${at})`;
+  } else {
+    el.innerHTML =
+      `Sent ${what} at ${when} — waiting for the agent to read ${b.count === 1 ? 'it' : 'them'}. ` +
+      (b.copied ? 'A prompt for it is on the clipboard. ' : '') +
+      `<code>${escapeHtml(b.markdown)}</code>`;
+  }
+}
+
+async function refreshShareStatus() {
+  try {
+    const { bundles } = await (await fetch('/api/feedback')).json();
+    const latest = bundles?.[bundles.length - 1];
+    if (!latest) return;
+    const copied = notes.lastBundle?.id === latest.id && notes.lastBundle.copied;
+    notes.lastBundle = { ...latest, copied };
+    renderShareStatus();
+    if (!latest.consumed) watchBundle();
+  } catch {}
+}
+
+function watchBundle() {
+  clearInterval(notes.watchTimer);
+  const started = Date.now();
+  notes.watchTimer = setInterval(async () => {
+    if (!notes.lastBundle || notes.lastBundle.consumed || Date.now() - started > 60 * 60 * 1000) return clearInterval(notes.watchTimer);
+    await refreshShareStatus();
+  }, 2000);
+}
+
+function saveMessageDraft() {
+  try {
+    localStorage.setItem('rvp:share-message', $('share-message').value);
+  } catch {}
+}
+
+$('btn-shot').addEventListener('click', takeScreenshot);
+$('btn-notes').addEventListener('click', () => setNotesOpen(!notes.open));
+$('btn-notes-close').addEventListener('click', () => setNotesOpen(false));
+$('btn-share').addEventListener('click', shareShots);
+$('share-message').addEventListener('input', saveMessageDraft);
+try {
+  $('share-message').value = localStorage.getItem('rvp:share-message') || '';
+  if (localStorage.getItem('rvp:notes-open') === '1') setNotesOpen(true);
+} catch {}
 
 // ================================================================ loop
 function frame() {
@@ -1114,6 +1443,9 @@ function connect() {
           }
         });
       } else if (!msg.error && msg.version > 0) setStatus('ok', 'up to date');
+    } else if (msg.type === 'shots') {
+      if (msg.from !== notes.clientId) loadShots();
+      refreshShareStatus();
     } else if (msg.type === 'seek') {
       loading.then(() => {
         const t = parseTime(msg.at, S.fps);
@@ -1126,7 +1458,10 @@ function connect() {
     }
   };
   es.onerror = () => setStatus('err', 'disconnected — is rive-video-preview running?');
-  es.onopen = () => {};
+  es.onopen = () => {
+    loadShots();
+    refreshShareStatus();
+  };
 }
 
 // ================================================================ boot
@@ -1145,4 +1480,4 @@ function connect() {
 });
 
 // Exposed for debugging / automation.
-window.rvp = { S, audio, seek, play, pause, timecodeText, parseTime };
+window.rvp = { S, audio, seek, play, pause, timecodeText, parseTime, takeScreenshot, notes };

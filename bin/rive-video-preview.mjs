@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // rive-video-preview — a scrubbable, audio-capable preview player for Rive CLI projects.
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { STATE_DIR, findRunning, stateFile } from '../lib/registry.mjs';
 import { PreviewServer } from '../lib/server.mjs';
 
 const HELP = `rive-video-preview — scrubbable video-style preview for Rive CLI projects
 
 usage:
   rive-video-preview [project-dir | file.riv] [options]
+  rive-video-preview mcp [project-dir]     run the MCP server (stdio) for coding agents
 
   The project dir defaults to the current directory. It builds the project with
   \`rive . --once\`, opens a player window, and rebuilds on every save. It keeps
@@ -32,6 +33,13 @@ options:
 player keys:
   space play/pause · ←/→ frame · shift+←/→ 1s · home/end · i/o in/out · x clear range
   c copy timecode · shift+c copy range · g go to time · l loop · m mute · f fullscreen · ? help
+  s screenshot this frame · n screenshots & notes panel
+
+feedback for agents:
+  Screenshots and notes are kept in <project>/.rive-preview/. "Send to agent" writes a
+  bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs) which the MCP server
+  serves through get_feedback / wait_for_feedback. Register it with, e.g.:
+    claude mcp add rive-preview -- rive-video-preview mcp
 `;
 
 function parseArgs(argv) {
@@ -98,24 +106,6 @@ function log(msg) {
   for (const line of String(msg).split('\n')) console.log(`[${ts}] ${line}`);
 }
 
-// ---------------------------------------------------------------- instance registry
-const STATE_DIR = path.join(os.tmpdir(), 'rive-video-preview');
-const stateFile = (target) => path.join(STATE_DIR, createHash('sha1').update(target).digest('hex').slice(0, 16) + '.json');
-
-async function findRunning(target) {
-  const file = stateFile(target);
-  if (!existsSync(file)) return null;
-  try {
-    const st = JSON.parse(readFileSync(file, 'utf8'));
-    process.kill(st.pid, 0);
-    const res = await fetch(`http://127.0.0.1:${st.port}/api/ping`, { signal: AbortSignal.timeout(1000) });
-    const info = await res.json();
-    if (info.app === 'rive-video-preview' && info.target === target) return { ...st, ...info };
-  } catch {}
-  rmSync(file, { force: true });
-  return null;
-}
-
 async function freePort(start) {
   const net = await import('node:net');
   for (let p = start; p < start + 100; p++) {
@@ -179,6 +169,10 @@ function openWindow(url, size, opts) {
 
 // ---------------------------------------------------------------- main
 async function main() {
+  if (process.argv[2] === 'mcp') {
+    const { runMcp } = await import('../lib/mcp.mjs');
+    return runMcp(process.argv.slice(3));
+  }
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
     process.stdout.write(HELP);
