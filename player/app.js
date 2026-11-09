@@ -105,6 +105,7 @@ const mix = {
   failed: false, // the last save failed: the local mix is ahead of the server
   rev: 0, // bumps on every local edit
   loadSeq: 0,
+  reloadWanted: false, // a remote change arrived while local edits were unsaved
   loaded: false,
 };
 
@@ -201,13 +202,19 @@ function saveMix() {
       toast(`Could not save the audio mix (${err.message || err})`, 3000);
     } finally {
       mix.inflight--;
+      // Another window saved while ours was under way: fetch its mix now that ours is saved.
+      if (mix.reloadWanted && !mixUnsaved()) loadMix();
     }
   });
   return mix.saveChain;
 }
 
 async function loadMix() {
-  if (mixUnsaved()) return;
+  if (mixUnsaved()) {
+    mix.reloadWanted = true; // retried when the local saves are done
+    return;
+  }
+  mix.reloadWanted = false;
   const seq = ++mix.loadSeq;
   const rev = mix.rev;
   let data;
@@ -219,7 +226,11 @@ async function loadMix() {
     return;
   }
   // A newer fetch started, or the user changed something meanwhile: this response is stale.
-  if (seq !== mix.loadSeq || rev !== mix.rev || mixUnsaved()) return;
+  if (seq !== mix.loadSeq) return;
+  if (rev !== mix.rev || mixUnsaved()) {
+    mix.reloadWanted = true;
+    return;
+  }
   if (Array.isArray(data.tracks) && data.tracks.length) mix.tracks = data.tracks.slice(0, MAX_TRACKS);
   mix.clips = data.clips && typeof data.clips === 'object' ? data.clips : {};
   mix.loaded = true;
