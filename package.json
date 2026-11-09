@@ -1,0 +1,15 @@
+{
+  "name": "rive-video-preview",
+  "version": "0.1.0",
+  "description": "A scrubbable, audio-capable video-style preview player for Rive CLI projects",
+  "type": "module",
+  "bin": {
+    "rive-video-preview": "bin/rive-video-preview.mjs"
+  },
+  "files": ["bin", "lib", "player"],
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@rive-app/webgl2-advanced": "2.49.4"
+  },
+  "license": "MIT"
+}

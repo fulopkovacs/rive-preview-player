@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rive Preview</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="badge"><span id="badge-dot"></span><span id="badge-name">rive-video-preview</span><span id="badge-status">connecting…</span></div>
+    <pre id="error" hidden></pre>
+    <div id="toast" hidden></div>
+    <div id="help" hidden>
+      <div class="help-card">
+        <h2>Keyboard</h2>
+        <dl>
+          <dt>Space / K</dt><dd>Play / pause</dd>
+          <dt>← / →</dt><dd>Step one frame</dd>
+          <dt>Shift + ← / →</dt><dd>Jump one second</dd>
+          <dt>Home / End</dt><dd>Start / end (of the in–out range if set)</dd>
+          <dt>I / O</dt><dd>Set in / out point at the playhead</dd>
+          <dt>X</dt><dd>Clear the in–out range</dd>
+          <dt>C</dt><dd>Copy the playhead timecode</dd>
+          <dt>Shift + C</dt><dd>Copy the in–out range</dd>
+          <dt>G</dt><dd>Go to a time (12.5 · 1:02.25 · f741)</dd>
+          <dt>L</dt><dd>Toggle loop</dd>
+          <dt>M</dt><dd>Mute</dd>
+          <dt>F</dt><dd>Fullscreen</dd>
+          <dt>Scroll on timeline</dt><dd>Zoom · Shift/horizontal scroll pans · double-click ruler resets</dd>
+        </dl>
+        <p class="hint">Press ? or Esc to close</p>
+      </div>
+    </div>
+  </main>
+
+  <section id="dock">
+    <div id="timeline">
+      <canvas id="timeline-canvas"></canvas>
+    </div>
+    <div id="controls">
+      <button id="btn-play" class="icon" title="Play / pause (Space)" aria-label="Play"></button>
+      <button id="btn-prev" class="icon small" title="Previous frame (←)" aria-label="Previous frame">
+        <svg viewBox="0 0 16 16"><path d="M4 3h1.6v10H4zM13 3v10L6.5 8z"/></svg>
+      </button>
+      <button id="btn-next" class="icon small" title="Next frame (→)" aria-label="Next frame">
+        <svg viewBox="0 0 16 16"><path d="M10.4 3H12v10h-1.6zM3 3v10l6.5-5z"/></svg>
+      </button>
+
+      <button id="timecode" title="Click to copy (C) · double-click to type a time (G)">
+        <span id="tc-time">00:00.000</span>
+        <span id="tc-frame">f 0</span>
+      </button>
+      <input id="goto" type="text" spellcheck="false" autocomplete="off" placeholder="12.5 · 1:02.25 · f741" hidden>
+      <span id="tc-dur">/ 00:00.000</span>
+
+      <button id="range" class="chip" title="In–out range · click to copy (Shift+C) · X clears" hidden></button>
+
+      <span class="spacer"></span>
+
+      <select id="sel-artboard" title="Artboard" hidden></select>
+      <select id="sel-animation" title="Animation" hidden></select>
+
+      <button id="btn-loop" class="chip toggle" title="Loop (L)">Loop</button>
+      <select id="sel-rate" title="Playback speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+      </select>
+      <button id="btn-mute" class="icon small" title="Mute (M)" aria-label="Mute"></button>
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+      <button id="btn-help" class="icon small" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
+    </div>
+  </section>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

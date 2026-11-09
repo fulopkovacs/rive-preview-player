@@ -1,0 +1,4 @@
+name: rive-based-rive-preview
+logs:
+  file: build/rive.log
+  problems: build/problems.log
