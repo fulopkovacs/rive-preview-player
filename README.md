@@ -115,6 +115,9 @@ unread. Exit codes: 0 feedback, 124 timeout, 130 interrupted (Ctrl-C), 1 error.
 
 While it (or the MCP tool `wait_for_feedback`) waits, it keeps a heartbeat file in
 `.rive-preview/listeners/`. That is how the player knows whether the agent is listening.
+Each bundle goes to exactly one consumer: whoever delivers it first takes a claim on it
+(`claimed.json` in the bundle folder), so two waiters, or a waiter and the MCP server, never
+both hand the same feedback to an agent.
 
 ### MCP server
 
