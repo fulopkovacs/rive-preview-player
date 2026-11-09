@@ -61,6 +61,8 @@ Sending writes a bundle to `<project>/.rive-preview/feedback/<date_time>/`:
 `feedback.md` (notes, timecodes and image paths), `feedback.json`, and the PNGs, each cropped to
 the artboard. A ready-made prompt for the agent is copied to the clipboard, and the panel shows
 when the agent has read the bundle. `.rive-preview/` gets its own `.gitignore`, so nothing in it is committed.
+For a bare `.riv`, everything goes in `.rive-preview/<file>.riv/` beside it, so several `.riv` files
+in one folder keep their screenshots apart.
 
 ### MCP server
 

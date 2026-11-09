@@ -1063,8 +1063,12 @@ new ResizeObserver(() => {
 const notes = {
   shots: [],
   open: false,
-  pending: new Map(), // id -> unsaved note text
+  // id -> { text, rev, sentRev, savedRev }: every edit bumps rev; a note is dirty until the
+  // server has its latest rev. Dirty notes are never overwritten by a refresh.
+  edits: new Map(),
   timers: new Map(), // id -> debounce timer
+  inflight: new Map(), // id -> promise of the last queued PATCH for that shot
+  sending: false, // notes are frozen while a share is in progress
   clientId: Math.random().toString(36).slice(2),
   lastBundle: null,
   watchTimer: null,
@@ -1227,14 +1231,18 @@ function renderShots() {
     el.querySelector('.shot-where').textContent = shotWhere(s);
     const ta = el.querySelector('textarea');
     // Don't clobber what is being typed.
-    if (document.activeElement !== ta && !notes.pending.has(s.id) && ta.value !== (s.note || '')) ta.value = s.note || '';
+    if (document.activeElement !== ta && !isDirty(s.id) && ta.value !== (s.note || '')) ta.value = s.note || '';
   });
   for (const el of existing.values()) el.remove();
+  for (const id of notes.edits.keys()) if (!notes.shots.some((s) => s.id === id) && !notes.inflight.has(id)) notes.edits.delete(id);
+  // While sending, nothing may change: the bundle is a snapshot of these notes.
+  for (const el of list.querySelectorAll('textarea, .shot-del')) el.disabled = notes.sending;
+  $('share-message').disabled = notes.sending;
   const n = notes.shots.length;
   $('notes-count').textContent = n ? String(n) : '';
   $('shot-empty').hidden = n > 0;
-  $('btn-share').disabled = n === 0;
-  $('btn-share').textContent = n ? `Send ${n} screenshot${n === 1 ? '' : 's'} to agent` : 'Send to agent';
+  $('btn-share').disabled = n === 0 || notes.sending;
+  $('btn-share').textContent = notes.sending ? 'Sending…' : n ? `Send ${n} screenshot${n === 1 ? '' : 's'} to agent` : 'Send to agent';
 }
 
 function jumpToShot(s) {
@@ -1248,55 +1256,95 @@ function jumpToShot(s) {
   seek(s.time ?? S.t);
 }
 
-function scheduleSave(id, note) {
-  notes.pending.set(id, note);
+const isDirty = (id) => {
+  const e = notes.edits.get(id);
+  return !!e && e.savedRev < e.rev;
+};
+
+function scheduleSave(id, text) {
+  const e = notes.edits.get(id) ?? { text: '', rev: 0, sentRev: 0, savedRev: 0 };
+  e.text = text;
+  e.rev++;
+  notes.edits.set(id, e);
   clearTimeout(notes.timers.get(id));
   notes.timers.set(id, setTimeout(() => saveNote(id), 400));
 }
 
-async function saveNote(id) {
+/**
+ * Send a shot's latest unsent revision. Saves for one shot run one after another, so they
+ * land in order; the returned promise (true = saved) covers every save queued before it.
+ * A failed save only marks its own revision unsent: a newer revision, queued or saved,
+ * always wins, so stale text can never be restored over newer text.
+ */
+function saveNote(id) {
   clearTimeout(notes.timers.get(id));
   notes.timers.delete(id);
-  if (!notes.pending.has(id)) return;
-  const note = notes.pending.get(id);
-  notes.pending.delete(id);
-  const shot = notes.shots.find((s) => s.id === id);
-  if (shot) shot.note = note;
-  try {
-    await fetch(`/api/shots/${id}`, { method: 'PATCH', headers: { 'x-client': notes.clientId }, body: JSON.stringify({ note }) });
-  } catch {
-    toast('Could not save the note — is rive-video-preview running?', 3000);
-  }
+  const e = notes.edits.get(id);
+  const prev = notes.inflight.get(id) ?? Promise.resolve(true);
+  if (!e || e.sentRev >= e.rev) return prev;
+  const rev = e.rev;
+  const text = e.text;
+  e.sentRev = rev;
+  const p = prev.then(async () => {
+    if (e.savedRev >= rev) return true;
+    try {
+      const res = await fetch(`/api/shots/${id}`, { method: 'PATCH', headers: { 'x-client': notes.clientId }, body: JSON.stringify({ note: text }) });
+      if (!res.ok) throw new Error(res.status === 404 ? 'not found' : await res.text());
+      e.savedRev = Math.max(e.savedRev, rev);
+      const shot = notes.shots.find((s) => s.id === id);
+      if (shot && e.savedRev === e.rev) shot.note = e.text;
+      return true;
+    } catch (err) {
+      if (!notes.shots.some((s) => s.id === id)) return true; // deleted meanwhile; nothing to keep
+      if (e.rev === rev) e.sentRev = e.savedRev; // only the latest text needs sending again
+      toast(`Could not save the note (${err.message || err}) — is rive-video-preview running?`, 3000);
+      return false;
+    }
+  });
+  notes.inflight.set(id, p);
+  p.then(() => {
+    if (notes.inflight.get(id) === p) notes.inflight.delete(id);
+  });
+  return p;
 }
 
-const flushSaves = () => Promise.all([...notes.pending.keys()].map(saveNote));
+/** Save every dirty note and wait for queued saves. Resolves true only if every note is saved. */
+async function flushSaves() {
+  const ids = new Set([...notes.edits.keys(), ...notes.inflight.keys()]);
+  await Promise.all([...ids].map(saveNote));
+  return ![...notes.edits.keys()].some((id) => isDirty(id) && notes.shots.some((s) => s.id === id));
+}
 
 async function deleteShot(id) {
+  if (notes.sending) return;
   const shot = notes.shots.find((s) => s.id === id);
-  const note = notes.pending.get(id) ?? shot?.note ?? '';
+  const note = notes.edits.get(id)?.text ?? shot?.note ?? '';
   if (note.trim() && !confirm('Delete this screenshot and its note?')) return;
   clearTimeout(notes.timers.get(id));
-  notes.pending.delete(id);
+  notes.edits.delete(id);
   notes.shots = notes.shots.filter((s) => s.id !== id);
   renderShots();
   await fetch(`/api/shots/${id}`, { method: 'DELETE' }).catch(() => {});
 }
 
 async function shareShots() {
-  if (!notes.shots.length) return;
-  const btn = $('btn-share');
-  btn.disabled = true;
-  btn.textContent = 'Sending…';
-  await flushSaves();
+  if (!notes.shots.length || notes.sending) return;
+  // Freeze the notes so nothing typed now is left out of the bundle and then deleted with the drafts.
+  notes.sending = true;
+  if (document.activeElement instanceof HTMLTextAreaElement) document.activeElement.blur();
+  renderShots();
   let bundle;
   try {
+    if (!(await flushSaves())) throw new Error('some notes could not be saved');
     const res = await fetch('/api/share', { method: 'POST', body: JSON.stringify({ message: $('share-message').value }) });
     bundle = await res.json();
     if (!res.ok) throw new Error(bundle.error || res.statusText);
   } catch (err) {
     toast(`Could not send: ${err.message || err}`, 3000);
-    renderShots();
     return;
+  } finally {
+    notes.sending = false;
+    renderShots();
   }
   $('share-message').value = '';
   saveMessageDraft();
