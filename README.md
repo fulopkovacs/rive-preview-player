@@ -1,8 +1,9 @@
 # rive-video-preview
 
+> **Unofficial project.** This is an independent, community-made tool. It is not affiliated
+> with, endorsed by, or supported by Rive. "Rive" is a trademark of its respective owner.
 
 https://github.com/user-attachments/assets/be18bae0-6259-4aae-89fc-0f8c92fcea6c
-
 
 A video-style preview player for Rive CLI projects: a scrubbable timeline, synced
 audio, frame stepping and copyable timecodes. It runs in a resizable Chrome app window.
