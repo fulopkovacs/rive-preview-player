@@ -443,11 +443,18 @@ function positionClips(w) {
   const layer = $('clips');
   const [va, vb] = viewRange();
   const els = new Map([...layer.children].map((el) => [el.dataset.key, el]));
+  // Pack only what is in view, at the x it is drawn at: clips that started before the view
+  // all sit at its left edge, and must get rows of their own there.
   const byLane = new Map();
   for (const ev of S.audioEvents) {
+    const el = els.get(ev.key);
+    const end = Math.min(ev.time + clipDuration(ev), S.end);
+    const visible = ev.time <= vb && end >= va;
+    if (el && !el.classList.contains('dragging')) el.hidden = !visible;
+    if (!visible) continue;
     const lane = clipTrack(ev);
     if (!byLane.has(lane)) byLane.set(lane, []);
-    byLane.get(lane).push({ ev, x: tToX(ev.time, w) });
+    byLane.get(lane).push({ ev, end, x: Math.max(TL.pad - 2, tToX(ev.time, w)) });
   }
   for (const [lane, items] of byLane) {
     // clusters, then rows inside each cluster
@@ -471,16 +478,12 @@ function positionClips(w) {
       const rows = c.rowEnds.length;
       const rowH = TL.laneH / rows;
       c.items.forEach((it, i) => {
-        const { ev } = it;
+        const { ev, end } = it;
         const el = els.get(ev.key);
         if (!el || el.classList.contains('dragging')) return;
-        const end = Math.min(ev.time + clipDuration(ev), S.end);
-        const visible = ev.time <= vb && end >= va;
-        el.hidden = !visible;
-        if (!visible) return;
         const nextInRow = c.items.slice(i + 1).find((o) => o.row === it.row)?.x ?? Infinity;
         const limit = Math.min(nextInRow, nextClusterX, w - TL.pad + 2);
-        const left = Math.max(TL.pad - 2, it.x);
+        const left = it.x;
         const full = tToX(end, w) - left;
         const width = Math.max(2, Math.min(limit - left, Math.max(8, full)));
         el.style.left = `${left}px`;
