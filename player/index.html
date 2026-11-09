@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div id="main">
   <main id="stage">
     <canvas id="canvas"></canvas>
     <div id="badge"><span id="badge-dot"></span><span id="badge-name">rive-video-preview</span><span id="badge-status">connecting…</span></div>
@@ -28,12 +29,31 @@
           <dt>L</dt><dd>Toggle loop</dd>
           <dt>M</dt><dd>Mute</dd>
           <dt>F</dt><dd>Fullscreen</dd>
+          <dt>S</dt><dd>Screenshot this frame (opens its note)</dd>
+          <dt>N</dt><dd>Show / hide screenshots &amp; notes</dd>
           <dt>Scroll on timeline</dt><dd>Zoom · Shift/horizontal scroll pans · double-click ruler resets</dd>
         </dl>
         <p class="hint">Press ? or Esc to close</p>
       </div>
     </div>
   </main>
+
+  <aside id="notes" hidden>
+    <header class="notes-head">
+      <h2>Screenshots &amp; notes</h2>
+      <button id="btn-notes-close" class="icon small" title="Hide (N)" aria-label="Hide notes">
+        <svg viewBox="0 0 16 16"><path d="M4.2 3.1 8 6.9l3.8-3.8 1.1 1.1L9.1 8l3.8 3.8-1.1 1.1L8 9.1l-3.8 3.8-1.1-1.1L6.9 8 3.1 4.2z"/></svg>
+      </button>
+    </header>
+    <div id="shot-list"></div>
+    <p id="shot-empty">Press <kbd>S</kbd> or the camera button to screenshot the current frame, then write what should change.</p>
+    <footer class="notes-foot">
+      <textarea id="share-message" rows="2" placeholder="Overall note for the agent (optional)" spellcheck="true"></textarea>
+      <button id="btn-share" class="primary" disabled>Send to agent</button>
+      <div id="share-status"></div>
+    </footer>
+  </aside>
+  </div>
 
   <section id="dock">
     <div id="timeline">
@@ -72,6 +92,10 @@
       </select>
       <button id="btn-mute" class="icon small" title="Mute (M)" aria-label="Mute"></button>
       <input id="volume" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+      <button id="btn-shot" class="icon small" title="Screenshot this frame (S)" aria-label="Screenshot">
+        <svg viewBox="0 0 16 16"><path d="M5.6 2.5h4.8l1 1.6H14a1 1 0 0 1 1 1v7.4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5.1a1 1 0 0 1 1-1h2.6zM8 5.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8zm0 1.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
+      </button>
+      <button id="btn-notes" class="chip toggle" title="Screenshots &amp; notes (N)">Notes<span id="notes-count"></span></button>
       <button id="btn-help" class="icon small" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
     </div>
   </section>
