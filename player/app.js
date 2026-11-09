@@ -430,7 +430,6 @@ function renderClips() {
 }
 
 const MIN_HIT_PX = 10; // every clip gets at least this much clickable width
-const MAX_ROWS = 6;
 
 /**
  * Lay the clips out on their lanes. Clips closer together than MIN_HIT_PX form a cluster
@@ -459,11 +458,9 @@ function positionClips(w) {
         c = { items: [], rowEnds: [], reach: -Infinity };
         clusters.push(c);
       }
+      // No row cap: every clip gets its own row, however many fire at once (rows just get thinner).
       let row = c.rowEnds.findIndex((end) => end <= it.x);
-      if (row < 0) {
-        if (c.rowEnds.length < MAX_ROWS) row = c.rowEnds.length;
-        else row = c.rowEnds.indexOf(Math.min(...c.rowEnds));
-      }
+      if (row < 0) row = c.rowEnds.length;
       c.rowEnds[row] = it.x + MIN_HIT_PX;
       c.reach = Math.max(c.reach, it.x + MIN_HIT_PX);
       it.row = row;
