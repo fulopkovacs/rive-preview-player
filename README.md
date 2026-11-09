@@ -89,10 +89,32 @@ overall note and press **Send to agent** (Cmd+Enter in the overall note does the
 
 Sending writes a bundle to `<project>/.rive-preview/feedback/<date_time>/`:
 `feedback.md` (notes, timecodes and image paths), `feedback.json`, and the PNGs, each cropped to
-the artboard. A ready-made prompt for the agent is copied to the clipboard, and the panel shows
-when the agent has read the bundle. `.rive-preview/` gets its own `.gitignore`, so nothing in it is committed.
+the artboard. The panel then says whether the agent is listening for it (it picks the bundle up
+right away) or not (paste the ready-made prompt, which is copied to the clipboard, into your
+agent chat), and shows when the agent has read the bundle. `.rive-preview/` gets its own `.gitignore`, so nothing in it is committed.
 For a bare `.riv`, everything goes in `.rive-preview/<file>.riv/` beside it, so several `.riv` files
 in one folder keep their screenshots apart.
+
+### Waking the agent: `wait-feedback`
+
+Sending only writes the bundle. A coding agent that has finished its turn won't notice it, so
+the agent listens with a background command:
+
+```bash
+rive-video-preview wait-feedback .                  # or path/to/project, or file.riv
+rive-video-preview wait-feedback . --timeout 30m    # give up after 30 minutes (exit 124)
+```
+
+It blocks until there is an unread bundle (or returns at once if one is already waiting),
+prints it (`feedback.md` with the notes, timecodes, artboard/animation and audio mix, plus every
+image path), marks it read and exits 0. Claude Code re-invokes the agent when a background
+command exits, so an agent that starts this with `run_in_background` after showing you the
+player is woken by your **Send to agent**, and its session stays free in the meantime. It reads
+the bundles from disk, so the player does not have to be running. `--no-mark-read` leaves them
+unread. Exit codes: 0 feedback, 124 timeout, 130 interrupted (Ctrl-C), 1 error.
+
+While it (or the MCP tool `wait_for_feedback`) waits, it keeps a heartbeat file in
+`.rive-preview/listeners/`. That is how the player knows whether the agent is listening.
 
 ### MCP server
 
@@ -101,7 +123,7 @@ in one folder keep their screenshots apart.
 | Tool | |
 |---|---|
 | `get_feedback` | unread bundles (notes, timecodes, artboard/animation, images); marks them read |
-| `wait_for_feedback` | blocks until you press Send to agent (default timeout 600s), then returns it |
+| `wait_for_feedback` | blocks the agent until you press Send to agent (default timeout 600s), then returns it; `wait-feedback` in the background is usually better |
 | `seek_player` | moves the open player to a time, e.g. to show the frame it changed |
 | `get_audio_mix` | the tracks and per-sound-effect levels set in the player, and the level each plays at |
 
@@ -117,12 +139,13 @@ claude mcp add rive-preview -- rive-video-preview mcp path/to/project
 It finds the project from the tool's `project` argument, the dir given after `mcp`, a
 `rive.yaml` at or above the working directory, one directly below it, or the only running player.
 It reads bundles from disk, so the player does not have to be running; only `seek_player` needs it.
-Agents without MCP can read the `feedback.md` path from the copied prompt.
+Agents without MCP can use `wait-feedback`, or read the `feedback.md` path from the copied prompt.
 
 ## Agent skill
 
 The repo ships an [Agent Skill](https://vercel.com/docs/agent-resources/skills) that teaches coding
-agents to start the player, point you at moments, and read the screenshots and notes you send.
+agents to start the player, point you at moments, listen for the screenshots and notes you send,
+and carry over the audio levels you set.
 Install it with the `skills` CLI:
 
 ```bash
@@ -144,9 +167,15 @@ MCP server registered for the agent (see MCP server above).
   f741). This moves the playhead of the player that is already open.
 - Timecodes the user pastes look like `00:12.350 (frame 741)`, which is seconds into
   the animation and the frame at its fps.
-- The user can screenshot frames, add notes and press "Send to agent". Read that with the
-  `get_feedback` MCP tool (or `wait_for_feedback` after asking for a review), or from
+- The user can screenshot frames, add notes and press "Send to agent". To hear it, run
+  `rive-video-preview wait-feedback .` in the background after showing the player and after
+  each round of fixes: it exits with the feedback (notes, timecodes, image paths, audio mix)
+  when the user sends it, and marks it read. Start it again after handling the feedback. Only
+  tell the user you'll pick feedback up automatically while it is running.
+- Otherwise read it with the `get_feedback` MCP tool, or from
   `.rive-preview/feedback/*/feedback.md`.
+- The user can set sound-effect levels in the player. The project is unchanged; read them with
+  the `get_audio_mix` MCP tool or from `.rive-preview/mix.json` to carry them over.
 ```
 
 ## Limits

@@ -11,6 +11,8 @@ const HELP = `rive-video-preview — scrubbable video-style preview for Rive CLI
 
 usage:
   rive-video-preview [project-dir | file.riv] [options]
+  rive-video-preview wait-feedback [project-dir | file.riv] [--timeout <time>] [--no-mark-read]
+                                           wait for "Send to agent", print the feedback, exit
   rive-video-preview mcp [project-dir]     run the MCP server (stdio) for coding agents
 
   The project dir defaults to the current directory. It builds the project with
@@ -38,8 +40,11 @@ player keys:
 
 feedback for agents:
   Screenshots and notes are kept in <project>/.rive-preview/. "Send to agent" writes a
-  bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs) which the MCP server
-  serves through get_feedback / wait_for_feedback. Register it with, e.g.:
+  bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs). To be woken by it, an
+  agent runs \`rive-video-preview wait-feedback .\` as a background command: it exits
+  with the feedback as soon as the user sends it (see wait-feedback --help). The
+  player shows the user whether an agent is listening. The MCP server serves the
+  same bundles through get_feedback / wait_for_feedback. Register it with, e.g.:
     claude mcp add rive-preview -- rive-video-preview mcp
 `;
 
@@ -173,6 +178,10 @@ async function main() {
   if (process.argv[2] === 'mcp') {
     const { runMcp } = await import('../lib/mcp.mjs');
     return runMcp(process.argv.slice(3));
+  }
+  if (process.argv[2] === 'wait-feedback') {
+    const { runWaitFeedback } = await import('../lib/wait-feedback.mjs');
+    return runWaitFeedback(process.argv.slice(3));
   }
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
