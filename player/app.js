@@ -1542,8 +1542,12 @@ window.addEventListener('keydown', (e) => {
   const tgt = e.target;
   if (tgt instanceof HTMLInputElement && tgt.type === 'range' && e.key.startsWith('Arrow')) return; // the slider's own keys
   if ((tgt instanceof HTMLInputElement && (tgt.type === 'text' || tgt.type === 'number')) || tgt instanceof HTMLTextAreaElement) {
-    // Typing a note: Esc leaves the field, Cmd/Ctrl+Enter finishes it (and sends from the overall note).
-    if (e.key === 'Escape') tgt.blur();
+    // Typing a note: Esc leaves the field (and region mode, if armed), Cmd/Ctrl+Enter finishes it
+    // (and sends from the overall note).
+    if (e.key === 'Escape') {
+      tgt.blur();
+      cancelRegion();
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && tgt instanceof HTMLTextAreaElement) {
       e.preventDefault();
       tgt.blur();
@@ -1944,17 +1948,25 @@ regionEl.addEventListener('pointerdown', (e) => {
   region.box = null;
   renderRegion();
 });
-regionEl.addEventListener('pointermove', (e) => {
-  if (!region.active || !region.start || region.pointer?.id !== e.pointerId) return;
+/** Grow the dragged box to the pointer; below MIN_DRAG_PX from the press it is still a click. */
+function dragRegionTo(e) {
   if (Math.hypot(e.clientX - region.pointer.x, e.clientY - region.pointer.y) < MIN_DRAG_PX && !region.box) return;
   const p = regionPoint(e);
   region.box = { x: region.start.x, y: region.start.y, width: p.x - region.start.x, height: p.y - region.start.y };
+}
+
+regionEl.addEventListener('pointermove', (e) => {
+  if (!region.active || !region.start || region.pointer?.id !== e.pointerId) return;
+  dragRegionTo(e);
+  if (!region.box) return; // still a click so far
   const box = normalizeRegion(region.box);
   regionInput.value = box ? `${Math.round(box.x)}, ${Math.round(box.y)}, ${Math.round(box.width)}, ${Math.round(box.height)}` : '';
   renderRegion();
 });
 const endRegionDrag = (e) => {
   if (!region.active || region.pointer?.id !== e.pointerId) return;
+  // End the box where the pointer was released, not at the last (possibly coalesced) move.
+  if (e.type === 'pointerup') dragRegionTo(e);
   const box = region.box && normalizeRegion(region.box);
   region.start = region.box = region.pointer = null;
   if (e.type === 'pointercancel') return renderRegion();
