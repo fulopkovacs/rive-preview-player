@@ -1953,7 +1953,7 @@ async function shareShots() {
     await navigator.clipboard.writeText(prompt);
     copied = true;
   } catch {}
-  notes.lastBundle = { id: bundle.id, createdAt: bundle.createdAt, markdown: bundle.markdown, count: n, consumed: null, copied };
+  notes.lastBundle = { id: bundle.id, createdAt: bundle.createdAt, markdown: bundle.markdown, count: n, consumed: null, copied, listening: bundle.listening };
   renderShareStatus();
   watchBundle();
   toast(copied ? `Sent ${n} to the agent · prompt copied` : `Sent ${n} to the agent`, 2400);
@@ -1969,21 +1969,30 @@ function renderShareStatus() {
   if (b.consumed) {
     const at = new Date(b.consumed.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     el.innerHTML = `<span class="ok">✓ The agent read the ${what} you sent at ${when}</span> (${at})`;
-  } else {
+  } else if (b.listening) {
+    // A `wait-feedback` command or MCP wait_for_feedback is running for this project.
+    el.innerHTML = `Sent ${what} at ${when}. The agent is listening and will pick ${b.count === 1 ? 'it' : 'them'} up now…`;
+  } else if (b.listening === false) {
     el.innerHTML =
-      `Sent ${what} at ${when} — waiting for the agent to read ${b.count === 1 ? 'it' : 'them'}. ` +
-      (b.copied ? 'A prompt for it is on the clipboard. ' : '') +
+      `Sent ${what} at ${when}, but the agent isn't listening for it. ` +
+      (b.copied ? 'Paste the prompt on your clipboard into your agent chat.' : 'Ask your agent to read it:') +
+      ` <code>${escapeHtml(b.markdown)}</code>`;
+  } else {
+    // An older server that doesn't report listeners: we can't tell.
+    el.innerHTML =
+      `Sent ${what} at ${when}. If your agent isn't waiting for it, ` +
+      (b.copied ? 'paste the prompt on your clipboard into your agent chat. ' : 'ask it to read it. ') +
       `<code>${escapeHtml(b.markdown)}</code>`;
   }
 }
 
 async function refreshShareStatus() {
   try {
-    const { bundles } = await (await fetch('/api/feedback')).json();
+    const { bundles, listening } = await (await fetch('/api/feedback')).json();
     const latest = bundles?.[bundles.length - 1];
     if (!latest) return;
     const copied = notes.lastBundle?.id === latest.id && notes.lastBundle.copied;
-    notes.lastBundle = { ...latest, copied };
+    notes.lastBundle = { ...latest, copied, listening };
     renderShareStatus();
     if (!latest.consumed) watchBundle();
   } catch {}
