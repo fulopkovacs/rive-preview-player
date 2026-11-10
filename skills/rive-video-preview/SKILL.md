@@ -56,6 +56,10 @@ prefer the background listener. Both mark bundles read.
   timecode (`00:12.350 (frame 741)` = seconds into the animation and the frame at its fps), and
   the **artboard and animation name**. Fix that animation, at that frame, unless the note says
   otherwise. Open the images to see the frames.
+- A screenshot may carry a highlighted **region** (Shift+S in the player): the image keeps the full
+  artboard with that box outlined and the rest dimmed, and the shot lists
+  `Region: x, y, width × height in artboard units` (from the artboard's top-left, with the artboard
+  size). The note is about what is inside that box: match it to the elements at those coordinates.
 - A bundle includes an **Audio mix** section when the user changed the levels (see below).
 - Reading marks a bundle as read; the player then shows the user "✓ The agent read it".
   `get_feedback` with `include_read: true` shows older bundles.

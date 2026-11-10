@@ -57,6 +57,72 @@ body {
   display: block;
 }
 
+/* Region screenshot: drag a box over the artboard (Shift+S). */
+#region {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  cursor: crosshair;
+  touch-action: none;
+}
+#region[hidden] { display: none; }
+#region-shade {
+  position: absolute;
+  outline: 1px dashed rgba(255, 204, 51, 0.7);
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+#region.dragging #region-shade { box-shadow: none; }
+#region-box {
+  position: absolute;
+  border: 2px solid #ffcc33;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+#region-box[hidden] { display: none; }
+#region-size {
+  position: absolute;
+  left: -2px;
+  bottom: calc(100% + 4px);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font: 11px var(--mono);
+  color: #1a1400;
+  background: #ffcc33;
+  white-space: nowrap;
+}
+#region-form {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 5px 6px 5px 12px;
+  border-radius: 999px;
+  background: rgba(14, 14, 16, 0.86);
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: default;
+}
+#region-hint { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#region-input {
+  width: 150px;
+  height: 24px;
+  padding: 0 8px;
+  font: 12px var(--mono);
+  color: var(--text);
+  background: #111113;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+#region-input:focus-visible { outline: 2px solid #ffcc33; outline-offset: 0; }
+#region-input.bad { border-color: var(--accent); }
+.region-esc { color: var(--dim); padding-right: 6px; }
+
 #badge {
   position: absolute;
   top: 10px;
@@ -111,6 +177,7 @@ body {
   border: 1px solid var(--line);
   font: 12px var(--mono);
   pointer-events: none;
+  z-index: 6;
 }
 
 #help {
@@ -349,6 +416,7 @@ button.icon {
   place-items: center;
 }
 button.icon.small { width: 30px; }
+button.icon.on { color: #ffcc33; border-color: rgba(255, 204, 51, 0.6); }
 button.icon svg { width: 15px; height: 15px; fill: currentColor; }
 #btn-play svg { width: 16px; height: 16px; }
 
@@ -455,12 +523,25 @@ kbd {
 .shot-n { color: var(--dim); font-size: 12px; }
 .shot-tc {
   height: 24px;
+  flex: none;
+  white-space: nowrap;
   padding: 0 7px;
   font: 11.5px var(--mono);
   color: #b9cdf7;
   background: rgba(91, 141, 239, 0.12);
   border-color: rgba(91, 141, 239, 0.4);
 }
+.shot-region {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #ffdd77;
+  background: rgba(255, 204, 51, 0.12);
+  border: 1px solid rgba(255, 204, 51, 0.4);
+  cursor: default;
+}
+.shot-region[hidden] { display: none; }
 .shot-where { color: var(--dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
 .shot-del { height: 24px; width: 24px; padding: 0; display: inline-grid; place-items: center; color: var(--dim); background: transparent; border-color: transparent; }
 .shot-del:hover { color: var(--accent); }
