@@ -42,11 +42,11 @@ player keys:
 feedback for agents:
   Screenshots and notes are kept in <project>/.rive-preview/. "Send to agent" writes a
   bundle to .rive-preview/feedback/<time>/ (feedback.md + PNGs; a region shot also records
-  its box in artboard units). To be woken by it, an
-  agent runs \`rive-video-preview wait-feedback .\` as a background command: it exits
-  with the feedback as soon as the user sends it (see wait-feedback --help). The
-  player shows the user whether an agent is listening. The MCP server serves the
-  same bundles through get_feedback / wait_for_feedback. Register it with, e.g.:
+  its box in artboard units). To be woken by it, an agent runs
+  \`rive-video-preview wait-feedback .\` as a background command: it exits with the
+  feedback as soon as the user sends it (see wait-feedback --help). The player shows
+  the user whether an agent is listening. The MCP server serves the same bundles
+  through get_feedback / wait_for_feedback. Register it with, e.g.:
     claude mcp add rive-preview -- rive-video-preview mcp
 `;
 
